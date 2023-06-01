@@ -4,14 +4,22 @@ https://www.heibing.org/2019/12/136
 */
 #define bufferSize 255      //一帧数据的最大字节数量
 #define baudrate 9600       //定义通讯波特率
-#define slaveID 9           //定义modbus RTU从站站号
+#define slaveID 20          //定义modbus RTU从站站号，20 == 0x14
 #define modbusDataSize 100  //定义modbus数据库空间大小
+#define LED_BUILTIN 2
+#define RX1 18
+#define TX1 19
+#define RX2 16
+#define TX2 17
 
 void setup() {
-  // put your setup code here, to run once:
-  Serial.begin(9600);
-  Serial.println("CRC-16 bit test program");
-  Serial.println("=======================");
+  pinMode(LED_BUILTIN, OUTPUT);
+  //定义串口
+  Serial.begin(baudrate);                         //调试用
+  Serial1.begin(baudrate, SERIAL_8N1, RX1, TX1);  //RS485，和上位机通信
+  Serial2.begin(baudrate);                        //TTL，和marlin通信
+  Serial.println("# Marlin2SamplerWrapper v0.0");
+  Serial.println("# by gu_jiefan @20230601");
 }
 
 void loop() {
@@ -26,26 +34,26 @@ void loop() {
   unsigned char address = 0;
   int val;
   val = analogRead(0);
-  //Serial.println(val,DEC);
+  //Serial1.println(val,DEC);
   delay(100);
 
   //延时1.5个字符宽度
   characterTime = 15000000 / baudrate;
 
   //如果串口缓冲区数据量大于0进入条件
-  while (Serial.available() > 0) {
+  while (Serial1.available() > 0) {
     //接收的数据量应小于一帧数据的最大字节数量
     if (address < bufferSize) {
-      frame[address] = Serial.read();
+      frame[address] = Serial1.read();
       address++;
     } else {
       //清空缓冲区
-      Serial.read();
+      Serial1.read();
     }
     //延迟
     delayMicroseconds(characterTime);
     //数据读取完成
-    if (Serial.available() == 0) {
+    if (Serial1.available() == 0) {
       //校验CRC
       unsigned short internalCrc = ModRTU_CRC((char*)frame, address - 2);
       internalCrc >> 1;
@@ -81,13 +89,10 @@ void loop() {
       }
 
       else {
-        //组装返回的数据
-        frame[2] = 0x00;
-        frame[3] = 0x00;
-        frame[4] = 0x00;
-        //报错：CRC校验失败，真实环境不需要
-
-        frame[5] = 0x02;
+        //CRC校验失败，通过Serial返回报错信息，点亮LED
+        Serial.println("CRC error");
+        Serial.write(frame, address);
+        digitalWrite(LED_BUILTIN, HIGH);
       }
 
       internalCrc = ModRTU_CRC((char*)frame, 7);
@@ -95,7 +100,7 @@ void loop() {
       frame[7] = internalCrc & 0xFF;
       //     frame[7] = internalCrc>>8;
       frame[8] = internalCrc >> 8;
-      Serial.write(&frame[0], 9);
+      Serial1.write(&frame[0], 9);
     }
   }
 }
