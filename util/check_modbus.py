@@ -41,6 +41,14 @@ def calc_crc16(string: str) -> int:
     return ((crc & 0xff) << 8) + (crc >> 8)
 
 
+def fill_crc():
+    while 1:
+        i = input('[i]: ')
+        crc_int = calc_crc16(i)
+        crc_str = hex(crc_int).replace('0x', '').zfill(4)
+        print(i, crc_str[:2], crc_str[2:])
+
+
 if __name__ == "__main__":
     print(hex(calc_crc16('14 06 00 01 00 01')))  # 0x1b0f
     print(is_modbus('1406000100011b0f'))  # True
