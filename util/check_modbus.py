@@ -50,7 +50,8 @@ def fill_crc():
 
 
 if __name__ == "__main__":
-    print(hex(calc_crc16('14 06 00 01 00 01')))  # 0x1b0f
-    print(is_modbus('1406000100011b0f'))  # True
-    print(is_modbus('09 06 00 0a 00 14 a8 8f'))  # True
-    print(is_modbus('09 06 00 0a 00 14'))  # False
+    # print(hex(calc_crc16('14 06 00 01 00 01')))  # 0x1b0f
+    # print(is_modbus('1406000100011b0f'))  # True
+    # print(is_modbus('09 06 00 0a 00 14 a8 8f'))  # True
+    # print(is_modbus('09 06 00 0a 00 14'))  # False
+    fill_crc()

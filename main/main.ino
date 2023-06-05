@@ -25,6 +25,14 @@ https://www.heibing.org/2019/12/136
 #define COLLECTOR_POS_X 0     //废液瓶的x坐标
 #define COLLECTOR_POS_Y 10    //废液瓶的y坐标
 
+
+/*定义寄存器地址
+1 - 归零
+2 - XY位置
+3 - 针头高度
+*/
+unsigned char ADDR[4] = { 0, 0, 0, 0 };
+
 /*配置取样器*/
 #define SAMPLE_Z_HIGH 15  //z轴升降的高度，单位mm
 
@@ -85,91 +93,54 @@ void loop() {
         if (slaveCode == slaveID || slaveCode == 0) {
           //检查功能码
           unsigned char funcCode = frame[1];
-          if (funcCode == 6) {
-            if (frame[2] == 0x00 && frame[3] == 0x01) {  //取样器回零点
-              if (frame[4] == 0x00 && frame[5] == 0x01)  //XYZ三轴归零
+          if (funcCode == 6) {                                            //写入
+            if (frame[2] == 0x00 && frame[3] <= 3 && frame[4] == 0x00) {  //目前只支持这些功能，做一点简单的校验
+              if (frame[3] == 1)                                          //归零
               {
                 Serial.println("G28");
                 Serial2.println("G28");
+                ADDR[1] = frame[5];
                 modbus_ok = true;
-              } else if (frame[4] == 0x00 && frame[5] == 0x02)  //X轴归零
+              } else if (frame[3] == 2)  //移动XY位置
               {
-                Serial.println("G28 X");
+                Serial.print("Move to ");
+                Serial.println(frame[5]);
                 Serial2.println("G28 X");
+                ADDR[2] = frame[5];
                 modbus_ok = true;
-              } else if (frame[4] == 0x00 && frame[5] == 0x03)  //Y轴归零
+              } else if (frame[3] == 3)  //改变针头高度
               {
-                Serial.println("G28 Y");
-                Serial2.println("G28 Y");
-                modbus_ok = true;
-              } else if (frame[4] == 0x00 && frame[5] == 0x04)  //Z轴归零
-              {
-                Serial.println("G28 Z");
-                Serial2.println("G28 Z");
-                modbus_ok = true;
-              } else {
-                Serial.println("Not allowed payload");
-                Serial.write(frame, address);
+                Serial.print("Z position changed to - ");
+                if (frame[5] == 1) {
+                  Serial.println("up");
+                  ADDR[3] = frame[5];
+                  modbus_ok = true;
+                } else if (frame[5] == 2) {
+                  ADDR[3] = frame[5];
+                  Serial.println("down");
+                  modbus_ok = true;
+                } else {
+                  modbus_ok = false;
+                }
                 modbus_ok = false;
               }
-            } else if (frame[2] == 0x00 && frame[3] == 0x06) {  // 移动并注射
-              if (frame[4] == 0x00 && frame[5] == 0x01)         //移动到第1个瓶子
-              {
-                Serial.println("G0 Z1");
-                Serial.println("G0 X10 Y10");
-                Serial.println("G0 Z15");
-                Serial2.println("G0 Z1");
-                Serial2.println("G0 X10 Y10");
-                Serial2.println("G0 Z15");
-                modbus_ok = true;
-              } else if (frame[4] == 0x00 && frame[5] == 0x02)  //X轴归零
-              {
-                Serial.println("G0 Z1");
-                Serial.println("G0 X10 Y20");
-                Serial.println("G0 Z15");
-                Serial2.println("G0 Z1");
-                Serial2.println("G0 X10 Y20");
-                Serial2.println("G0 Z15");
-                modbus_ok = true;
-              } else if (frame[4] == 0x00 && frame[5] == 0x03)  //Y轴归零
-              {
-                Serial.println("G0 Z1");
-                Serial.println("G0 X10 Y30");
-                Serial.println("G0 Z15");
-                Serial2.println("G0 Z1");
-                Serial2.println("G0 X10 Y30");
-                Serial2.println("G0 Z15");
-                modbus_ok = true;
-              } else if (frame[4] == 0x00 && frame[5] == 0x04)  //Z轴归零
-              {
-                Serial.println("G0 Z1");
-                Serial.println("G0 X10 Y40");
-                Serial.println("G0 Z15");
-                Serial2.println("G0 Z1");
-                Serial2.println("G0 X10 Y40");
-                Serial2.println("G0 Z15");
-                modbus_ok = true;
-              } else {
-                Serial.println("Not allowed payload");
-                Serial.write(frame, address);
-                modbus_ok = false;
-              }
-            }
-            // frame[2] = 0x04;
-            // frame[3] = 0x00;
-            // frame[4] = 0x00;
-            // frame[5] = 0x00;
-            // frame[6] = val;
+            } else
+              modbus_ok = false;
           }
 
-          else {
+          else if (funcCode == 3) {  // 读取
             //组装返回的数据
-            frame[2] = 0x00;
-            frame[3] = 0x00;
-            frame[4] = 0x00;
-            //报错：未知功能码
-
-            frame[5] = 0x01;
+            frame[5] = ADDR[frame[3] - 10];
+            if (frame[3] == 11) {
+              Serial.print("Read IS_Homed ");
+            } else if (frame[3] == 12) {
+              Serial.print("Read XY ");
+            } else if (frame[3] == 13) {
+              Serial.print("Read Z ");
+            } else {
+              Serial.print("Error ");
+            }
+            Serial.println(frame[5]);
           }
         }
       }
