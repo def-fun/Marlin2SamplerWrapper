@@ -80,6 +80,13 @@ void loop() {
     delayMicroseconds(characterTime);
     //数据读取完成
     if (Serial1.available() == 0) {
+      //在Serial输出从Serial1接收到的信息
+      Serial.print("[HEX] ");
+      Serial.println(hex_to_hex_string(frame, address));
+      Serial.print("[TXT] ");
+      Serial.write(frame, address);
+      Serial.print("\n");
+
       //校验CRC
       unsigned short internalCrc = ModRTU_CRC((char*)frame, address - 2);
       internalCrc >> 1;
@@ -142,25 +149,24 @@ void loop() {
             }
             Serial.println(frame[5]);
           }
+
+          if (!modbus_ok) {
+            frame[1] += 0x80;
+          }
+          internalCrc = ModRTU_CRC((char*)frame, address - 2);
+          internalCrc >> 1;
+          frame[address - 2] = internalCrc & 0xFF;
+          //     frame[7] = internalCrc>>8;
+          frame[address - 1] = internalCrc >> 8;
+          // Serial1.write(&frame[0], 9);
+          Serial1.write(&frame[0], address);
         }
       }
-
       else {
         //CRC校验失败，通过Serial返回报错信息，点亮LED
-        Serial.println("CRC error");
-        Serial.write(frame, address);
+        Serial.println("^^^ CRC ERROR ^^^");
         digitalWrite(LED_BUILTIN, HIGH);
       }
-      if (!modbus_ok) {
-        frame[1] += 0x80;
-      }
-      internalCrc = ModRTU_CRC((char*)frame, address - 2);
-      internalCrc >> 1;
-      frame[address - 2] = internalCrc & 0xFF;
-      //     frame[7] = internalCrc>>8;
-      frame[address - 1] = internalCrc >> 8;
-      // Serial1.write(&frame[0], 9);
-      Serial1.write(&frame[0], address);
     }
   }
 }
@@ -178,4 +184,17 @@ unsigned int ModRTU_CRC(char* buf, int len) {
     }
   }
   return crc;
+}
+
+String hex_to_hex_string(unsigned char* _hex, int length) {
+  String out = "";
+  char _16[] = { '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f' };
+  for (int i = 0; i < length; i++) {
+    unsigned char n = _hex[i];
+    int ii = n / 16;
+    out += _16[ii];
+    out += _16[n % 16];
+    out += " ";
+  }
+  return out;
 }
