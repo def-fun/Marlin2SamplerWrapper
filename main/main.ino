@@ -4,6 +4,9 @@ todo 自动计算所有样品瓶的坐标
 todo 检查marlin返回的数据之后，再响应modbus
 https://www.heibing.org/2019/12/136
 */
+#include <Arduino.h>
+#include <Regexp.h>
+
 /*通讯参数*/
 #define bufferSize 255      //modbus一帧数据的最大字节数量
 #define baudrate 9600       //定义所有通讯的波特率
@@ -24,7 +27,8 @@ https://www.heibing.org/2019/12/136
 #define SAMPLE_POS_END_Y 110  //和第一个瓶子成对角线的瓶子的y坐标
 #define COLLECTOR_POS_X 0     //废液瓶的x坐标
 #define COLLECTOR_POS_Y 10    //废液瓶的y坐标
-
+float POINTS_X[26] = { 0.0, 0.0, -0.0, -0.0, -0.0, -0.0, 25.0, 25.0, 25.0, 25.0, 25.0, 50.0, 50.0, 50.0, 50.0, 50.0, 75.0, 75.0, 75.0, 75.0, 75.0, 100.0, 100.0, 100.0, 100.0, 100.0 };
+float POINTS_Y[26] = { 0.0, 0.0, 25.0, 50.0, 75.0, 100.0, 0.0, 25.0, 50.0, 75.0, 100.0, 0.0, 25.0, 50.0, 75.0, 100.0, 0.0, 25.0, 50.0, 75.0, 100.0, 0.0, 25.0, 50.0, 75.0, 100.0 };
 
 /*定义寄存器地址
 1 - 归零
@@ -32,6 +36,9 @@ https://www.heibing.org/2019/12/136
 3 - 针头高度
 */
 unsigned char ADDR[4] = { 0, 0, 0, 0 };
+//Serial2正在读取
+bool is_serial2_reading = false;
+char frame2[bufferSize];  //Serial2
 
 /*配置取样器*/
 #define SAMPLE_Z_HIGH 15  //z轴升降的高度，单位mm
@@ -46,21 +53,39 @@ void setup() {
   Serial.println("# by gu_jiefan@pharmablock.com");
 }
 
+// called for each match
+void match_callback(const char *match,          // matching string (not null-terminated)
+                    const unsigned int length,  // length of matching string
+                    const MatchState &ms)       // MatchState in use (to get captures)
+{
+  char cap[10];  // must be large enough to hold captures
+
+  Serial.print("Matched: ");
+  Serial.write((byte *)match, length);
+  Serial.println();
+
+  for (word i = 0; i < ms.level; i++) {
+    Serial.print("Capture ");
+    Serial.print(i, DEC);
+    Serial.print(" = ");
+    ms.GetCapture(cap, i);
+    Serial.println(cap);
+  }  // end of for each capture
+
+}  // end of match_callback
+
 void loop() {
   //延时
   unsigned int characterTime;
   //数据缓冲区定义
-  unsigned char frame[bufferSize];
-
+  unsigned char frame1[bufferSize];  //Serial1
   //接收到的数据原始CRC
   unsigned int receivedCrc;
   //接收到的数据长度
-  unsigned char address = 0;
+  unsigned char address1 = 0;
+  unsigned char address2 = 0;
   //modbus通讯异常标识
   bool modbus_ok = false;
-  int val;
-  val = analogRead(0);
-  //Serial1.println(val,DEC);
   delay(100);
 
   //延时1.5个字符宽度
@@ -69,9 +94,9 @@ void loop() {
   //如果串口缓冲区数据量大于0进入条件
   while (Serial1.available() > 0) {
     //接收的数据量应小于一帧数据的最大字节数量
-    if (address < bufferSize) {
-      frame[address] = Serial1.read();
-      address++;
+    if (address1 < bufferSize) {
+      frame1[address1] = Serial1.read();
+      address1++;
     } else {
       //清空缓冲区
       Serial1.read();
@@ -82,48 +107,53 @@ void loop() {
     if (Serial1.available() == 0) {
       //在Serial输出从Serial1接收到的信息
       Serial.print("[HEX] ");
-      Serial.println(hex_to_hex_string(frame, address));
+      Serial.println(hex_to_hex_string(frame1, address1));
       Serial.print("[TXT] ");
-      Serial.write(frame, address);
+      Serial.write(frame1, address1);
       Serial.print("\n");
 
       //校验CRC
-      unsigned short internalCrc = ModRTU_CRC((char*)frame, address - 2);
+      unsigned short internalCrc = ModRTU_CRC((char *)frame1, address1 - 2);
       internalCrc >> 1;
       unsigned char high = internalCrc & 0xFF;
       unsigned char low = internalCrc >> 8;
 
       //校验通过
-      if (low == frame[address - 1] && high == frame[address - 2]) {
-        unsigned char slaveCode = frame[0];
+      if (low == frame1[address1 - 1] && high == frame1[address1 - 2]) {
+        unsigned char slaveCode = frame1[0];
         //设备号匹配，兼容广播模式
         if (slaveCode == slaveID || slaveCode == 0) {
           //检查功能码
-          unsigned char funcCode = frame[1];
-          if (funcCode == 6) {                                            //写入
-            if (frame[2] == 0x00 && frame[3] <= 3 && frame[4] == 0x00) {  //目前只支持这些功能，做一点简单的校验
-              if (frame[3] == 1)                                          //归零
+          unsigned char funcCode = frame1[1];
+          if (funcCode == 6) {                                               //写入
+            if (frame1[2] == 0x00 && frame1[3] <= 3 && frame1[4] == 0x00) {  //目前只支持这些功能，做一点简单的校验
+              if (frame1[3] == 1)                                            //归零
               {
                 Serial.println("G28");
                 Serial2.println("G28");
-                ADDR[1] = frame[5];
+                ADDR[1] = frame1[5];
                 modbus_ok = true;
-              } else if (frame[3] == 2)  //移动XY位置
+              } else if (frame1[3] == 2)  //移动XY位置
               {
                 Serial.print("Move to ");
-                Serial.println(frame[5]);
-                Serial2.println("G28 X");
-                ADDR[2] = frame[5];
+                Serial.println(frame1[5]);
+                //                Serial2.printlnf("G0 X%d Y%d F6000", POINTS_X[frame1[5]], POINTS_Y[frame1[5]]);
+                Serial2.print("G0 X");
+                Serial2.print(POINTS_X[frame1[5]]);
+                Serial2.print(" Y");
+                Serial.print(POINTS_Y[frame1[5]]);
+                Serial2.print(" F6000\n");
+                ADDR[2] = frame1[5];
                 modbus_ok = true;
-              } else if (frame[3] == 3)  //改变针头高度
+              } else if (frame1[3] == 3)  //改变针头高度
               {
                 Serial.print("Z position changed to - ");
-                if (frame[5] == 1) {
+                if (frame1[5] == 1) {
                   Serial.println("up");
-                  ADDR[3] = frame[5];
+                  ADDR[3] = frame1[5];
                   modbus_ok = true;
-                } else if (frame[5] == 2) {
-                  ADDR[3] = frame[5];
+                } else if (frame1[5] == 2) {
+                  ADDR[3] = frame1[5];
                   Serial.println("down");
                   modbus_ok = true;
                 } else {
@@ -137,41 +167,62 @@ void loop() {
 
           else if (funcCode == 3) {  // 读取
             //组装返回的数据
-            frame[5] = ADDR[frame[3] - 10];
-            if (frame[3] == 11) {
+            frame1[5] = ADDR[frame1[3] - 10];
+            if (frame1[3] == 11) {
               Serial.print("Read IS_Homed ");
-            } else if (frame[3] == 12) {
+            } else if (frame1[3] == 12) {
               Serial.print("Read XY ");
-            } else if (frame[3] == 13) {
+            } else if (frame1[3] == 13) {
               Serial.print("Read Z ");
             } else {
               Serial.print("Error ");
             }
-            Serial.println(frame[5]);
+            Serial.println(frame1[5]);
           }
 
           if (!modbus_ok) {
-            frame[1] += 0x80;
+            frame1[1] += 0x80;
           }
-          internalCrc = ModRTU_CRC((char*)frame, address - 2);
+          internalCrc = ModRTU_CRC((char *)frame1, address1 - 2);
           internalCrc >> 1;
-          frame[address - 2] = internalCrc & 0xFF;
-          //     frame[7] = internalCrc>>8;
-          frame[address - 1] = internalCrc >> 8;
-          // Serial1.write(&frame[0], 9);
-          Serial1.write(&frame[0], address);
+          frame1[address1 - 2] = internalCrc & 0xFF;
+          //     frame1[7] = internalCrc>>8;
+          frame1[address1 - 1] = internalCrc >> 8;
+          // Serial1.write(&frame1[0], 9);
+          Serial1.write(&frame1[0], address1);
         }
-      }
-      else {
+      } else {
         //CRC校验失败，通过Serial返回报错信息，点亮LED
         Serial.println("^^^ CRC ERROR ^^^");
         digitalWrite(LED_BUILTIN, HIGH);
       }
     }
   }
+
+  // 读取串口3，用于检查XYZ位置
+  while (Serial2.available() > 0) {
+    if (address2 < bufferSize) {
+      frame2[address2] = Serial2.read();
+      address2++;
+    } else {
+      Serial2.read();
+    }
+    //延迟
+    delayMicroseconds(characterTime);
+    //数据读取完成
+    if (Serial1.available() == 0) {
+      if (frame2[address2 - 3] == 'o' && frame2[address2 - 2] == 'k' && frame2[address2 - 1] == '\n') {
+        // 解析XYZ的位置
+        MatchState ms(frame2);  //frame2没有全部置零，可能有bug
+        int count = ms.GlobalMatch("X:(%d+%.%d+) Y:(%d+%.%d+) Z:(%d+%.%d+)", match_callback);
+      }
+    }
+  }
+  //要求marlin汇报当前位置
+  Serial2.println("M114 R");
 }
 
-unsigned int ModRTU_CRC(char* buf, int len) {
+unsigned int ModRTU_CRC(char *buf, int len) {
   unsigned int crc = 0xFFFF;
   for (int pos = 0; pos < len; pos++) {
     crc ^= (unsigned int)buf[pos];
@@ -186,7 +237,7 @@ unsigned int ModRTU_CRC(char* buf, int len) {
   return crc;
 }
 
-String hex_to_hex_string(unsigned char* _hex, int length) {
+String hex_to_hex_string(unsigned char *_hex, int length) {
   String out = "";
   char _16[] = { '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f' };
   for (int i = 0; i < length; i++) {
