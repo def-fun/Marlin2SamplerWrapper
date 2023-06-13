@@ -51,16 +51,16 @@ def plot():
     ax = plt.gca()
     ax.set_aspect(1)
 
-    points_x = []
-    points_y = []
-    for j in range(1, (m + 1) * (n + 1) + 1):
-        x, y = calc_pos(j)
-        points_x.append(x)
-        points_y.append(y)
+    _points_x = []
+    _points_y = []
+    for p in range(1, (m + 1) * (n + 1) + 1):
+        _x, _y = calc_pos(p)
+        _points_x.append(_x)
+        _points_y.append(_y)
         # plt.text(x, y, f'P{j}({x}, {y})')  # 序号+坐标标注
-        plt.text(x, y, f'P{j}')  # 序号标注
-    plt.plot(points_x, points_y)  # 折线
-    plt.scatter(points_x, points_y)  # 点
+        plt.text(_x, _y, f'P{p}')  # 序号标注
+    plt.plot(_points_x, _points_y)  # 折线
+    plt.scatter(_points_x, _points_y)  # 点
 
     # x轴标签
     plt.xlabel('X')
@@ -75,3 +75,12 @@ def plot():
 
 
 plot()
+points_x = []
+points_y = []
+for j in range(1, (m + 1) * (n + 1) + 1):
+    x, y = calc_pos(j)
+    points_x.append(x)
+    points_y.append(y)
+
+print(points_x)
+print(points_y)

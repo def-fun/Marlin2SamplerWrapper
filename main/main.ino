@@ -38,7 +38,12 @@ float POINTS_Y[26] = { 0.0, 0.0, 25.0, 50.0, 75.0, 100.0, 0.0, 25.0, 50.0, 75.0,
 unsigned char ADDR[4] = { 0, 0, 0, 0 };
 //Serial2正在读取
 bool is_serial2_reading = false;
-char frame2[bufferSize];  //Serial2
+String frame2;                      //Serial2
+unsigned long serial2_read_at = 0;  // 读取到串口数据的时间点
+int serial2_read_interval = 500;
+float pos_x = 0.0;  // `M114 R`读取到的XYZ位置
+float pos_y = 0.0;
+float pos_z = 0.0;
 
 /*配置取样器*/
 #define SAMPLE_Z_HIGH 15  //z轴升降的高度，单位mm
@@ -48,9 +53,10 @@ void setup() {
   //初始化串口
   Serial.begin(baudrate);                         //调试用
   Serial1.begin(baudrate, SERIAL_8N1, RX1, TX1);  //RS485，和上位机通信
-  Serial2.begin(baudrate);                        //TTL，和marlin通信
+  Serial2.begin(115200);                          //TTL，和marlin通信
   Serial.println("# Marlin2SamplerWrapper v0.0.0");
   Serial.println("# by gu_jiefan@pharmablock.com");
+  serial2_read_at = millis();
 }
 
 // called for each match
@@ -199,10 +205,10 @@ void loop() {
     }
   }
 
-  // 读取串口3，用于检查XYZ位置
+  // 读取Serial2，用于检查XYZ位置
   while (Serial2.available() > 0) {
     if (address2 < bufferSize) {
-      frame2[address2] = Serial2.read();
+      frame2 += char(Serial2.read());
       address2++;
     } else {
       Serial2.read();
@@ -210,16 +216,50 @@ void loop() {
     //延迟
     delayMicroseconds(characterTime);
     //数据读取完成
-    if (Serial1.available() == 0) {
-      if (frame2[address2 - 3] == 'o' && frame2[address2 - 2] == 'k' && frame2[address2 - 1] == '\n') {
-        // 解析XYZ的位置
-        MatchState ms(frame2);  //frame2没有全部置零，可能有bug
-        int count = ms.GlobalMatch("X:(%d+%.%d+) Y:(%d+%.%d+) Z:(%d+%.%d+)", match_callback);
+    if (Serial2.available() == 0) {
+      Serial.print("frame2: ");
+      Serial.println(frame2);
+      Serial.print("address2: ");
+      Serial.println(address2);
+      if (frame2.endsWith("ok\n") && frame2.indexOf("X:") == 0) {
+        // 解析XYZ的位置  X:0.00 Y:0.00 Z:0.00 E:0.00 Count A:0B:0 Z:0
+        Serial.println("try to match");
+        int index_of_y = frame2.indexOf(" Y:");
+        String str_x;
+        str_x = frame2.substring(2, index_of_y);
+        pos_x = str_x.toFloat();
+
+        int index_of_z = frame2.indexOf(" Z:");
+        String str_y;
+        str_y = frame2.substring(index_of_y + 3, index_of_z);
+        pos_y = str_y.toFloat();
+
+        int index_of_e = frame2.indexOf(" E:");
+        String str_z;
+        str_z = frame2.substring(index_of_z + 3, index_of_e);
+        pos_z = str_z.toFloat();
+
+        Serial.print("str_x: ");
+        Serial.println(str_x);
+        Serial.print("pos_x: ");
+        Serial.println(pos_x);
+        Serial.print("str_y: ");
+        Serial.println(str_y);
+        Serial.print("pos_y: ");
+        Serial.println(pos_y);
+        Serial.print("str_z: ");
+        Serial.println(str_z);
+        Serial.print("pos_z: ");
+        Serial.println(pos_z);
       }
     }
   }
-  //要求marlin汇报当前位置
-  Serial2.println("M114 R");
+  frame2 = "";
+  if (millis() - serial2_read_at > serial2_read_interval) {
+    //要求marlin汇报当前位置
+    Serial2.println("M114 R");
+    serial2_read_at = millis();
+  }
 }
 
 unsigned int ModRTU_CRC(char *buf, int len) {
