@@ -18,35 +18,37 @@ https://www.heibing.org/2019/12/136
 #define RX2 16  //Serial2，TTL，和marlin通信
 #define TX2 17
 
-/*提供样品盘参数，基于正方形网格计算每个瓶子的坐标. */
-#define SAMPLE_X_NUM 5        //x方向有5列
-#define SAMPLE_Y_NUM 5        //y方向有5列
-#define SAMPLE_POS_1_X 10     //第一个瓶子的x坐标
-#define SAMPLE_POS_1_Y 10     //第一个瓶子的y坐标
-#define SAMPLE_POS_END_X 110  //和第一个瓶子成对角线的瓶子的x坐标
-#define SAMPLE_POS_END_Y 110  //和第一个瓶子成对角线的瓶子的y坐标
-#define COLLECTOR_POS_X 0     //废液瓶的x坐标
-#define COLLECTOR_POS_Y 10    //废液瓶的y坐标
-float POINTS_X[26] = { 0.0, 0.0, -0.0, -0.0, -0.0, -0.0, 25.0, 25.0, 25.0, 25.0, 25.0, 50.0, 50.0, 50.0, 50.0, 50.0, 75.0, 75.0, 75.0, 75.0, 75.0, 100.0, 100.0, 100.0, 100.0, 100.0 };
-float POINTS_Y[26] = { 0.0, 0.0, 25.0, 50.0, 75.0, 100.0, 0.0, 25.0, 50.0, 75.0, 100.0, 0.0, 25.0, 50.0, 75.0, 100.0, 0.0, 25.0, 50.0, 75.0, 100.0, 0.0, 25.0, 50.0, 75.0, 100.0 };
+/*提供样品盘参数，第一个瓶子的坐标在数组里的索引是2，以此类推. */
+//#define SAMPLE_X_NUM 5        //x方向有5列
+//#define SAMPLE_Y_NUM 5        //y方向有5列
+//#define SAMPLE_POS_1_X 10     //第一个瓶子的x坐标
+//#define SAMPLE_POS_1_Y 10     //第一个瓶子的y坐标
+//#define SAMPLE_POS_END_X 110  //和第一个瓶子成对角线的瓶子的x坐标
+//#define SAMPLE_POS_END_Y 110  //和第一个瓶子成对角线的瓶子的y坐标
+#define COLLECTOR_POS_X 101.10  //第101个瓶子，废液瓶的x坐标
+#define COLLECTOR_POS_Y 101.10  //第101个瓶子，废液瓶的y坐标
+// 下面这种初始化，右侧数组的长度小于声明的数量，可能会出错
+float POINTS_X[128] = { 0.0, 0.0, -0.0, -0.0, -0.0, -0.0, 25.0, 25.0, 25.0, 25.0, 25.0, 50.0, 50.0, 50.0, 50.0, 50.0, 75.0, 75.0, 75.0, 75.0, 75.0, 100.0, 100.0, 100.0, 100.0, 100.0 };
+float POINTS_Y[128] = { 0.0, 0.0, 25.0, 50.0, 75.0, 100.0, 0.0, 25.0, 50.0, 75.0, 100.0, 0.0, 25.0, 50.0, 75.0, 100.0, 0.0, 25.0, 50.0, 75.0, 100.0, 0.0, 25.0, 50.0, 75.0, 100.0 };
+#define SAMPLE_Z_HIGH 15  //z轴升降的高度，单位mm
 
-/*定义寄存器地址
-1 - 归零
-2 - XY位置
-3 - 针头高度
+/* MODBUS寄存器地址，1-3为写入，11-13为读取，初始化均为0
+    1,11 - 是否归零，0x00 没有归零，0x01 XYZ三轴已经归零
+    2,12 - XY位置，1-25为取样瓶，101为废液瓶
+    3,13 - 针头升降，0x01 针头抬起，0x02 针头落下
 */
-unsigned char ADDR[4] = { 0, 0, 0, 0 };
+unsigned char REGISTER[16];
+unsigned char WRITE_CODE = 0x06;
+unsigned char READ_CODE = 0x03;
+
 //Serial2正在读取
 bool is_serial2_reading = false;
 String frame2;                      //Serial2
 unsigned long serial2_read_at = 0;  // 读取到串口数据的时间点
-int serial2_read_interval = 500;
-float pos_x = 0.0;  // `M114 R`读取到的XYZ位置
+int serial2_read_interval = 1200;   // 向marlin发送位置请求的时间间隔，单位毫秒
+float pos_x = 0.0;                  // `M114 R`读取到的XYZ位置
 float pos_y = 0.0;
 float pos_z = 0.0;
-
-/*配置取样器*/
-#define SAMPLE_Z_HIGH 15  //z轴升降的高度，单位mm
 
 void setup() {
   pinMode(LED_BUILTIN, OUTPUT);
@@ -57,28 +59,30 @@ void setup() {
   Serial.println("# Marlin2SamplerWrapper v0.0.0");
   Serial.println("# by gu_jiefan@pharmablock.com");
   serial2_read_at = millis();
+  POINTS_X[101] = COLLECTOR_POS_X;
+  POINTS_Y[101] = COLLECTOR_POS_X;
 }
 
-// called for each match
-void match_callback(const char *match,          // matching string (not null-terminated)
-                    const unsigned int length,  // length of matching string
-                    const MatchState &ms)       // MatchState in use (to get captures)
-{
-  char cap[10];  // must be large enough to hold captures
-
-  Serial.print("Matched: ");
-  Serial.write((byte *)match, length);
-  Serial.println();
-
-  for (word i = 0; i < ms.level; i++) {
-    Serial.print("Capture ");
-    Serial.print(i, DEC);
-    Serial.print(" = ");
-    ms.GetCapture(cap, i);
-    Serial.println(cap);
-  }  // end of for each capture
-
-}  // end of match_callback
+//// called for each match
+//void match_callback(const char *match,          // matching string (not null-terminated)
+//                    const unsigned int length,  // length of matching string
+//                    const MatchState &ms)       // MatchState in use (to get captures)
+//{
+//  char cap[10];  // must be large enough to hold captures
+//
+//  Serial.print("Matched: ");
+//  Serial.write((byte *)match, length);
+//  Serial.println();
+//
+//  for (word i = 0; i < ms.level; i++) {
+//    Serial.print("Capture ");
+//    Serial.print(i, DEC);
+//    Serial.print(" = ");
+//    ms.GetCapture(cap, i);
+//    Serial.println(cap);
+//  }  // end of for each capture
+//
+//}  // end of match_callback
 
 void loop() {
   //延时
@@ -129,61 +133,68 @@ void loop() {
         unsigned char slaveCode = frame1[0];
         //设备号匹配，兼容广播模式
         if (slaveCode == slaveID || slaveCode == 0) {
-          //检查功能码
           unsigned char funcCode = frame1[1];
-          if (funcCode == 6) {                                               //写入
-            if (frame1[2] == 0x00 && frame1[3] <= 3 && frame1[4] == 0x00) {  //目前只支持这些功能，做一点简单的校验
-              if (frame1[3] == 1)                                            //归零
-              {
-                Serial.println("G28");
-                Serial2.println("G28");
-                ADDR[1] = frame1[5];
+          unsigned char register_addr = frame1[2] * 256 + frame1[3];
+          unsigned char write_payload = frame1[4] * 256 + frame1[5];
+          //校验范围
+          if (funcCode != WRITE_CODE && funcCode != READ_CODE) { break; }
+          if (register_addr > 15) { break; }
+          if (write_payload > 128) { break; }
+
+          if (funcCode == WRITE_CODE) {   //写入
+            if (register_addr == 0x01) {  // 归零
+              Serial.println("Homing");
+              Serial2.println("G28");
+              REGISTER[0x01] = write_payload;  //可能会溢出，下同
+              REGISTER[11] = 0;                //表明已经归零
+              modbus_ok = true;
+            } else if (register_addr == 0x02) {  //移动XY位置
+              Serial.print("Move to pos: ");
+              Serial.println(frame1[5]);
+              //Serial2.printlnf("G0 X%d Y%d F6000", POINTS_X[frame1[5]], POINTS_Y[frame1[5]]);
+              Serial2.print("G0 X");
+              Serial2.print(POINTS_X[frame1[5]]);
+              Serial2.print(" Y");
+              Serial2.print(POINTS_Y[frame1[5]]);
+              Serial2.print(" F3000\n");
+              REGISTER[0x02] = write_payload;
+              modbus_ok = true;
+            } else if (register_addr == 0x03) {  //改变针头高度
+              if (write_payload == 0x01) {       // 针头抬起
+                Serial.println("Z up");
+                Serial2.print("G0 Z0\n");
+                REGISTER[0x03] = 0x01;
                 modbus_ok = true;
-              } else if (frame1[3] == 2)  //移动XY位置
-              {
-                Serial.print("Move to ");
-                Serial.println(frame1[5]);
-                //                Serial2.printlnf("G0 X%d Y%d F6000", POINTS_X[frame1[5]], POINTS_Y[frame1[5]]);
-                Serial2.print("G0 X");
-                Serial2.print(POINTS_X[frame1[5]]);
-                Serial2.print(" Y");
-                Serial.print(POINTS_Y[frame1[5]]);
-                Serial2.print(" F6000\n");
-                ADDR[2] = frame1[5];
+              } else if (write_payload == 0x02) {  //针头下降
+                Serial.println("Z down");
+                Serial2.print("G0 Z");
+                Serial2.print(SAMPLE_Z_HIGH);
+                Serial2.print("\n");
+                REGISTER[0x03] = 0x02;
                 modbus_ok = true;
-              } else if (frame1[3] == 3)  //改变针头高度
-              {
-                Serial.print("Z position changed to - ");
-                if (frame1[5] == 1) {
-                  Serial.println("up");
-                  ADDR[3] = frame1[5];
-                  modbus_ok = true;
-                } else if (frame1[5] == 2) {
-                  ADDR[3] = frame1[5];
-                  Serial.println("down");
-                  modbus_ok = true;
-                } else {
-                  modbus_ok = false;
-                }
+              } else {
                 modbus_ok = false;
               }
-            } else
+            } else {
               modbus_ok = false;
-          }
-
-          else if (funcCode == 3) {  // 读取
-            //组装返回的数据
-            frame1[5] = ADDR[frame1[3] - 10];
-            if (frame1[3] == 11) {
-              Serial.print("Read IS_Homed ");
-            } else if (frame1[3] == 12) {
-              Serial.print("Read XY ");
-            } else if (frame1[3] == 13) {
-              Serial.print("Read Z ");
+            }
+          } else if (funcCode == READ_CODE) {     // 读取
+            frame1[5] = REGISTER[register_addr];  // 大于256会溢出
+            if (register_addr == 11) {
+              Serial.print("Read IS_Homed: ");
+            } else if (register_addr == 12) {
+              Serial.print("Read XY: ");
+            } else if (register_addr == 13) {
+              Serial.print("Read Z: ");
             } else {
               Serial.print("Error ");
             }
-            Serial.println(frame1[5]);
+            Serial.println(REGISTER[register_addr]);  // register_addr大于16会溢出
+            Serial.print("[REGISTER HEX] ");
+            Serial.print(hex_to_hex_string(REGISTER, 16));
+            modbus_ok = true;
+          } else {
+            modbus_ok = false;
           }
 
           if (!modbus_ok) {
@@ -212,18 +223,19 @@ void loop() {
       address2++;
     } else {
       Serial2.read();
+      frame2 = "";
     }
     //延迟
     delayMicroseconds(characterTime);
     //数据读取完成
     if (Serial2.available() == 0) {
-      Serial.print("frame2: ");
-      Serial.println(frame2);
-      Serial.print("address2: ");
-      Serial.println(address2);
+      //      Serial.print("frame2: ");
+      //      Serial.println(frame2);
+      //      Serial.print("address2: ");
+      //      Serial.println(address2);
       if (frame2.endsWith("ok\n") && frame2.indexOf("X:") == 0) {
         // 解析XYZ的位置  X:0.00 Y:0.00 Z:0.00 E:0.00 Count A:0B:0 Z:0
-        Serial.println("try to match");
+        //        Serial.println("try to match");
         int index_of_y = frame2.indexOf(" Y:");
         String str_x;
         str_x = frame2.substring(2, index_of_y);
@@ -239,17 +251,48 @@ void loop() {
         str_z = frame2.substring(index_of_z + 3, index_of_e);
         pos_z = str_z.toFloat();
 
-        Serial.print("str_x: ");
-        Serial.println(str_x);
-        Serial.print("pos_x: ");
-        Serial.println(pos_x);
-        Serial.print("str_y: ");
-        Serial.println(str_y);
-        Serial.print("pos_y: ");
-        Serial.println(pos_y);
-        Serial.print("str_z: ");
-        Serial.println(str_z);
-        Serial.print("pos_z: ");
+//        Serial.print("str_x: ");
+//        Serial.println(str_x);
+//        Serial.print("pos_x: ");
+//        Serial.println(pos_x);
+//        Serial.print("str_y: ");
+//        Serial.println(str_y);
+//        Serial.print("pos_y: ");
+//        Serial.println(pos_y);
+//        Serial.print("str_z: ");
+//        Serial.println(str_z);
+//        Serial.print("pos_z: ");
+
+
+        for (int m = 0; m < 127; m++) {  // 查找XY坐标和编号的关系
+            float delta_x;
+            float delta_y;
+            delta_x = POINTS_X[m] - pos_x;
+            delta_y = POINTS_Y[m] - pos_y;
+          if (-0.1 <delta_x && delta_x < 0.1 && -0.1 < delta_y && delta_y < 0.1 && POINTS_X[m]>0.1 && POINTS_Y[m]>0.1) {
+            Serial.print("[m] ");
+            Serial.println(m);
+//            Serial.print("[delta_x] ");
+//            Serial.print(delta_x);
+//            Serial.print("[delta_y] ");
+//            Serial.print(delta_y);
+            REGISTER[12] = (unsigned char)m;
+//            break;
+          }
+        }
+        if (-0.1 < (pos_z - SAMPLE_Z_HIGH) < 0.1) {
+          REGISTER[13] = 0x02;
+        } else if (-0.1 < pos_z < 0.1) {
+          REGISTER[13] = 0x01;
+        } else {
+          REGISTER[13] = 0;
+        }
+
+        Serial.print("[POS] ");
+        Serial.print(pos_x);
+        Serial.print(" ");
+        Serial.print(pos_y);
+        Serial.print(" ");
         Serial.println(pos_z);
       }
     }
