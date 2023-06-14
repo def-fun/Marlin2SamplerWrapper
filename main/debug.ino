@@ -1,40 +1,8 @@
 /*
 ESP32+Arduino调试程序
 fixme 目的是根据坐标判断瓶子位号，但是位号从1直接跳到25了，而且位号越来越大
+原因为：`float POINTS_X[128]={1025.0};`只能把第一个元素赋值为1025.0，其他127个元素都是0.0
 
-Serial输出如下：
-```
-    Marlin2SamplerWrapper v0.0.0
-    # by gu_jiefan@pharmablock.com
-    [m] 1[REGISTER]
-    00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
-    00 00 00 00 00 00 00 00 00 00 00 00 01 00 00 00
-    [12] 1
-    [m] 25[REGISTER]
-    00 00 00 00 00 00 00 00 00 00 00 00 01 00 00 00
-    00 00 00 00 00 00 00 00 00 00 00 00 19 00 00 00
-    [12] 25
-    [m] 26[REGISTER]
-    00 00 00 00 00 00 00 00 00 00 00 00 19 00 00 00
-    00 00 00 00 00 00 00 00 00 00 00 00 1a 00 00 00
-    [12] 26
-    [m] 27[REGISTER]
-    00 00 00 00 00 00 00 00 00 00 00 00 1a 00 00 00
-    00 00 00 00 00 00 00 00 00 00 00 00 1b 00 00 00
-    [12] 27
-    [m] 28[REGISTER]
-    00 00 00 00 00 00 00 00 00 00 00 00 1b 00 00 00
-    00 00 00 00 00 00 00 00 00 00 00 00 1c 00 00 00
-    [12] 28
-    [m] 29[REGISTER]
-    00 00 00 00 00 00 00 00 00 00 00 00 1c 00 00 00
-    00 00 00 00 00 00 00 00 00 00 00 00 1d 00 00 00
-    [12] 29
-    [m] 30[REGISTER]
-    00 00 00 00 00 00 00 00 00 00 00 00 1d 00 00 00
-    00 00 00 00 00 00 00 00 00 00 00 00 1e 00 00 00
-    [12] 30
-```
 */
 
 /*通讯参数*/
@@ -62,8 +30,9 @@ float __POINTS_X[] = { 1025.0, 0.0, -0.0, -0.0, -0.0, -0.0, 25.0, 25.0, 25.0, 25
                        75.0, 75.0, 75.0, 75.0, 75.0, 100.0, 100.0, 100.0, 100.0, 100.0 };
 float __POINTS_Y[] = { 1025.0, 0.0, 25.0, 50.0, 75.0, 100.0, 0.0, 25.0, 50.0, 75.0, 100.0, 0.0, 25.0, 50.0, 75.0, 100.0,
                        0.0, 25.0, 50.0, 75.0, 100.0, 0.0, 25.0, 50.0, 75.0, 100.0 };
-float POINTS_X[128] = { 1025.0 };  // 所有大于1024的都是未定义的位置
-float POINTS_Y[128] = { 1025.0 };
+// 后面用1025.0初始化所有元素，因此所有大于1024的都是未定义的位置
+float POINTS_X[128];
+float POINTS_Y[128];
 #define SAMPLE_Z_HIGH 15  //z轴升降的高度，单位mm
 
 /* MODBUS寄存器地址，1-3为写入，11-13为读取，初始化均为0
@@ -93,12 +62,25 @@ void setup() {
   Serial.println("# Marlin2SamplerWrapper v0.0.0");
   Serial.println("# by gu_jiefan@pharmablock.com");
   serial2_read_at = millis();
-  for (int i = 0; i < 25; i++) {
+  for (int i = 0; i < 128; i++) {  //数组里的所有元素用1025.0初始化
+    POINTS_X[i] = 1025.0;
+    POINTS_Y[i] = 1025.0;
+  }
+  for (int i = 0; i <= 25; i++) {
     POINTS_X[i] = __POINTS_X[i];
     POINTS_Y[i] = __POINTS_Y[i];
   }
   POINTS_X[101] = COLLECTOR_POS_X;
   POINTS_Y[101] = COLLECTOR_POS_Y;
+  // 打印出所有瓶位和对应的XY坐标
+  // for(int i=0; i<128; i++){
+  //   Serial.print(i);
+  //   Serial.print(" ");
+  //   Serial.print(POINTS_X[i]);
+  //   Serial.print(", ");
+  //   Serial.println(POINTS_Y[i]);
+  // }
+  // Serial.println("------------------------------");
 }
 
 String hex_to_hex_string(unsigned char *_hex, int length);
@@ -160,6 +142,21 @@ void loop_fake(String m114_resp) {
         float delta_y;
         delta_x = POINTS_X[m] - pos_x;
         delta_y = POINTS_Y[m] - pos_y;
+        // Serial.print("m: ");
+        // Serial.print(m);
+        // Serial.print(", ");
+        // Serial.print("delta: ");
+        // Serial.print(delta_x);
+        // Serial.print(", ");
+        // Serial.print(delta_y);
+        // Serial.print(", POINTS: ");
+        // Serial.print(POINTS_X[m]);
+        // Serial.print(", ");
+        // Serial.print(POINTS_Y[m]);
+        // Serial.print(", pos: ");
+        // Serial.print(pos_x);
+        // Serial.print(", ");
+        // Serial.println(pos_y);
         if (abs(delta_x) < 0.03 && abs(delta_y) < 0.03) {
           Serial.print("[m] ");
           Serial.print(m);
@@ -199,31 +196,32 @@ String hex_to_hex_string(unsigned char *_hex, int length) {
 }
 
 void loop() {
-  loop_fake("X:0.01 Y:0.0 Z:0.00 E:0.00 Count A:0B:0 Z:0\nok\n");
-  loop_fake("X:0.01 Y:0.0 Z:0.00 E:0.00 Count A:0B:0 Z:0\nok\n");
-  loop_fake("X:-0.01 Y:25.0 Z:0.00 E:0.00 Count A:0B:0 Z:0\nok\n");
-  // loop_fake("X:-0.01 Y:50.0 Z:0.00 E:0.00 Count A:0B:0 Z:0\nok\n");
-  // loop_fake("X:-0.01 Y:75.0 Z:0.00 E:0.00 Count A:0B:0 Z:0\nok\n");
-  // loop_fake("X:-0.01 Y:100.0 Z:0.00 E:0.00 Count A:0B:0 Z:0\nok\n");
-  // loop_fake("X:25.01 Y:0.0 Z:0.00 E:0.00 Count A:0B:0 Z:0\nok\n");
-  // loop_fake("X:25.01 Y:25.0 Z:0.00 E:0.00 Count A:0B:0 Z:0\nok\n");
-  // loop_fake("X:25.01 Y:50.0 Z:0.00 E:0.00 Count A:0B:0 Z:0\nok\n");
-  // loop_fake("X:25.01 Y:75.0 Z:0.00 E:0.00 Count A:0B:0 Z:0\nok\n");
-  // loop_fake("X:25.01 Y:100.0 Z:0.00 E:0.00 Count A:0B:0 Z:0\nok\n");
-  // loop_fake("X:50.01 Y:0.0 Z:0.00 E:0.00 Count A:0B:0 Z:0\nok\n");
-  // loop_fake("X:50.01 Y:25.0 Z:0.00 E:0.00 Count A:0B:0 Z:0\nok\n");
-  // loop_fake("X:50.01 Y:50.0 Z:0.00 E:0.00 Count A:0B:0 Z:0\nok\n");
-  // loop_fake("X:50.01 Y:75.0 Z:0.00 E:0.00 Count A:0B:0 Z:0\nok\n");
-  // loop_fake("X:50.01 Y:100.0 Z:0.00 E:0.00 Count A:0B:0 Z:0\nok\n");
-  // loop_fake("X:75.01 Y:0.0 Z:0.00 E:0.00 Count A:0B:0 Z:0\nok\n");
-  // loop_fake("X:75.01 Y:25.0 Z:0.00 E:0.00 Count A:0B:0 Z:0\nok\n");
-  // loop_fake("X:75.01 Y:50.0 Z:0.00 E:0.00 Count A:0B:0 Z:0\nok\n");
-  // loop_fake("X:75.01 Y:75.0 Z:0.00 E:0.00 Count A:0B:0 Z:0\nok\n");
-  // loop_fake("X:75.01 Y:100.0 Z:0.00 E:0.00 Count A:0B:0 Z:0\nok\n");
-  // loop_fake("X:100.01 Y:0.0 Z:0.00 E:0.00 Count A:0B:0 Z:0\nok\n");
-  // loop_fake("X:100.01 Y:25.0 Z:0.00 E:0.00 Count A:0B:0 Z:0\nok\n");
-  // loop_fake("X:100.01 Y:50.0 Z:0.00 E:0.00 Count A:0B:0 Z:0\nok\n");
-  // loop_fake("X:100.01 Y:75.0 Z:0.00 E:0.00 Count A:0B:0 Z:0\nok\n");
-  // loop_fake("X:100.01 Y:100.0 Z:0.00 E:0.00 Count A:0B:0 Z:0\nok\n");
-  delay(1000);
+  loop_fake("X:0.01 Y:0.0 Z:0.00 E:0.00 Count A:0B:0 Z:0\nok\n");      //1
+  loop_fake("X:0.01 Y:0.0 Z:0.00 E:0.00 Count A:0B:0 Z:0\nok\n");      //1
+  loop_fake("X:-0.01 Y:25.0 Z:0.00 E:0.00 Count A:0B:0 Z:0\nok\n");    //2
+  loop_fake("X:-0.01 Y:50.0 Z:0.00 E:0.00 Count A:0B:0 Z:0\nok\n");    //3
+  loop_fake("X:-0.01 Y:75.0 Z:0.00 E:0.00 Count A:0B:0 Z:0\nok\n");    //4
+  loop_fake("X:-0.01 Y:100.0 Z:0.00 E:0.00 Count A:0B:0 Z:0\nok\n");   //5
+  loop_fake("X:25.01 Y:0.0 Z:0.00 E:0.00 Count A:0B:0 Z:0\nok\n");     //6
+  loop_fake("X:25.01 Y:25.0 Z:0.00 E:0.00 Count A:0B:0 Z:0\nok\n");    //7
+  loop_fake("X:25.01 Y:50.0 Z:0.00 E:0.00 Count A:0B:0 Z:0\nok\n");    //8
+  loop_fake("X:25.01 Y:75.0 Z:0.00 E:0.00 Count A:0B:0 Z:0\nok\n");    //9
+  loop_fake("X:25.01 Y:100.0 Z:0.00 E:0.00 Count A:0B:0 Z:0\nok\n");   //10
+  loop_fake("X:50.01 Y:0.0 Z:0.00 E:0.00 Count A:0B:0 Z:0\nok\n");     //11
+  loop_fake("X:50.01 Y:25.0 Z:0.00 E:0.00 Count A:0B:0 Z:0\nok\n");    //12
+  loop_fake("X:50.01 Y:50.0 Z:0.00 E:0.00 Count A:0B:0 Z:0\nok\n");    //13
+  loop_fake("X:50.01 Y:75.0 Z:0.00 E:0.00 Count A:0B:0 Z:0\nok\n");    //14
+  loop_fake("X:50.01 Y:100.0 Z:0.00 E:0.00 Count A:0B:0 Z:0\nok\n");   //15
+  loop_fake("X:75.01 Y:0.0 Z:0.00 E:0.00 Count A:0B:0 Z:0\nok\n");     //16
+  loop_fake("X:75.01 Y:25.0 Z:0.00 E:0.00 Count A:0B:0 Z:0\nok\n");    //17
+  loop_fake("X:75.01 Y:50.0 Z:0.00 E:0.00 Count A:0B:0 Z:0\nok\n");    //18
+  loop_fake("X:75.01 Y:75.0 Z:0.00 E:0.00 Count A:0B:0 Z:0\nok\n");    //19
+  loop_fake("X:75.01 Y:100.0 Z:0.00 E:0.00 Count A:0B:0 Z:0\nok\n");   //20
+  loop_fake("X:100.01 Y:0.0 Z:0.00 E:0.00 Count A:0B:0 Z:0\nok\n");    //21
+  loop_fake("X:100.01 Y:25.0 Z:0.00 E:0.00 Count A:0B:0 Z:0\nok\n");   //22
+  loop_fake("X:100.01 Y:50.0 Z:0.00 E:0.00 Count A:0B:0 Z:0\nok\n");   //23
+  loop_fake("X:100.01 Y:75.0 Z:0.00 E:0.00 Count A:0B:0 Z:0\nok\n");   //24
+  loop_fake("X:100.01 Y:100.0 Z:0.00 E:0.00 Count A:0B:0 Z:0\nok\n");  //25
+  Serial.println("--------------------------------------------------");
+  delay(2000);
 }
