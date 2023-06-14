@@ -27,9 +27,14 @@ https://www.heibing.org/2019/12/136
 //#define SAMPLE_POS_END_Y 110  //和第一个瓶子成对角线的瓶子的y坐标
 #define COLLECTOR_POS_X 101.10  //第101个瓶子，废液瓶的x坐标
 #define COLLECTOR_POS_Y 101.10  //第101个瓶子，废液瓶的y坐标
-// 下面这种初始化，右侧数组的长度小于声明的数量，可能会出错
-float POINTS_X[128] = { 0.0, 0.0, -0.0, -0.0, -0.0, -0.0, 25.0, 25.0, 25.0, 25.0, 25.0, 50.0, 50.0, 50.0, 50.0, 50.0, 75.0, 75.0, 75.0, 75.0, 75.0, 100.0, 100.0, 100.0, 100.0, 100.0 };
-float POINTS_Y[128] = { 0.0, 0.0, 25.0, 50.0, 75.0, 100.0, 0.0, 25.0, 50.0, 75.0, 100.0, 0.0, 25.0, 50.0, 75.0, 100.0, 0.0, 25.0, 50.0, 75.0, 100.0, 0.0, 25.0, 50.0, 75.0, 100.0 };
+// __POINTS_X用于存储前25个瓶位的坐标，POINTS_X用于存储第101个瓶子的坐标
+float __POINTS_X[] = { 1025.0, 0.0, -0.0, -0.0, -0.0, -0.0, 25.0, 25.0, 25.0, 25.0, 25.0, 50.0, 50.0, 50.0, 50.0, 50.0,
+                       75.0, 75.0, 75.0, 75.0, 75.0, 100.0, 100.0, 100.0, 100.0, 100.0 };
+float __POINTS_Y[] = { 1025.0, 0.0, 25.0, 50.0, 75.0, 100.0, 0.0, 25.0, 50.0, 75.0, 100.0, 0.0, 25.0, 50.0, 75.0, 100.0,
+                       0.0, 25.0, 50.0, 75.0, 100.0, 0.0, 25.0, 50.0, 75.0, 100.0 };
+// 后面用1025.0初始化所有元素，因此所有大于1024的都是未定义的位置
+float POINTS_X[128];
+float POINTS_Y[128];
 #define SAMPLE_Z_HIGH 15  //z轴升降的高度，单位mm
 
 /* MODBUS寄存器地址，1-3为写入，11-13为读取，初始化均为0
@@ -43,7 +48,7 @@ unsigned char READ_CODE = 0x03;
 
 //Serial2正在读取
 bool is_serial2_reading = false;
-String frame2;                      //Serial2
+String frame2 = "";                 //Serial2
 unsigned long serial2_read_at = 0;  // 读取到串口数据的时间点
 int serial2_read_interval = 1200;   // 向marlin发送位置请求的时间间隔，单位毫秒
 float pos_x = 0.0;                  // `M114 R`读取到的XYZ位置
@@ -59,8 +64,25 @@ void setup() {
   Serial.println("# Marlin2SamplerWrapper v0.0.0");
   Serial.println("# by gu_jiefan@pharmablock.com");
   serial2_read_at = millis();
+  for (int i = 0; i < 128; i++) {  //数组里的所有元素用1025.0初始化
+    POINTS_X[i] = 1025.0;
+    POINTS_Y[i] = 1025.0;
+  }
+  for (int i = 0; i <= 25; i++) {
+    POINTS_X[i] = __POINTS_X[i];
+    POINTS_Y[i] = __POINTS_Y[i];
+  }
   POINTS_X[101] = COLLECTOR_POS_X;
-  POINTS_Y[101] = COLLECTOR_POS_X;
+  POINTS_Y[101] = COLLECTOR_POS_Y;
+  // 打印出所有瓶位和对应的XY坐标
+  // for(int i=0; i<128; i++){
+  //   Serial.print(i);
+  //   Serial.print(" ");
+  //   Serial.print(POINTS_X[i]);
+  //   Serial.print(", ");
+  //   Serial.println(POINTS_Y[i]);
+  // }
+  // Serial.println("------------------------------");
 }
 
 //// called for each match
@@ -116,10 +138,10 @@ void loop() {
     //数据读取完成
     if (Serial1.available() == 0) {
       //在Serial输出从Serial1接收到的信息
-      Serial.print("[HEX] ");
-      Serial.println(hex_to_hex_string(frame1, address1));
-      Serial.print("[TXT] ");
-      Serial.write(frame1, address1);
+//      Serial.print("[HEX] ");
+//      Serial.println(hex_to_hex_string(frame1, address1));
+//      Serial.print("[TXT] ");
+//      Serial.write(frame1, address1);
       Serial.print("\n");
 
       //校验CRC
@@ -223,7 +245,7 @@ void loop() {
       address2++;
     } else {
       Serial2.read();
-      frame2 = "";
+      frame2.clear();
     }
     //延迟
     delayMicroseconds(characterTime);
@@ -269,15 +291,15 @@ void loop() {
             float delta_y;
             delta_x = POINTS_X[m] - pos_x;
             delta_y = POINTS_Y[m] - pos_y;
-          if (-0.1 <delta_x && delta_x < 0.1 && -0.1 < delta_y && delta_y < 0.1 && POINTS_X[m]>0.1 && POINTS_Y[m]>0.1) {
-            Serial.print("[m] ");
-            Serial.println(m);
-//            Serial.print("[delta_x] ");
-//            Serial.print(delta_x);
-//            Serial.print("[delta_y] ");
-//            Serial.print(delta_y);
-            REGISTER[12] = (unsigned char)m;
-//            break;
+        if (abs(delta_x) < 0.03 && abs(delta_y) < 0.03) {
+//          Serial.print("[m] ");
+//          Serial.print(m);
+//          Serial.println("[REGISTER] ");
+//          Serial.println(hex_to_hex_string(REGISTER, 16));
+          REGISTER[12] = (unsigned char)m;
+//          Serial.println(hex_to_hex_string(REGISTER, 16));
+//          Serial.print("[12] ");
+//          Serial.println((int)REGISTER[12]);
           }
         }
         if (-0.1 < (pos_z - SAMPLE_Z_HIGH) < 0.1) {
