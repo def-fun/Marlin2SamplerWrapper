@@ -138,10 +138,10 @@ void loop() {
     //数据读取完成
     if (Serial1.available() == 0) {
       //在Serial输出从Serial1接收到的信息
-//      Serial.print("[HEX] ");
-//      Serial.println(hex_to_hex_string(frame1, address1));
-//      Serial.print("[TXT] ");
-//      Serial.write(frame1, address1);
+      //      Serial.print("[HEX] ");
+      //      Serial.println(hex_to_hex_string(frame1, address1));
+      //      Serial.print("[TXT] ");
+      //      Serial.write(frame1, address1);
       Serial.print("\n");
 
       //校验CRC
@@ -157,7 +157,7 @@ void loop() {
         if (slaveCode == slaveID || slaveCode == 0) {
           unsigned char funcCode = frame1[1];
           unsigned char register_addr = frame1[2] * 256 + frame1[3];
-          unsigned char write_payload = frame1[4] * 256 + frame1[5];
+          unsigned char write_payload = frame1[4] * 256 + frame1[5];  //可能会溢出
           //校验范围
           if (funcCode != WRITE_CODE && funcCode != READ_CODE) { break; }
           if (register_addr > 15) { break; }
@@ -165,10 +165,16 @@ void loop() {
 
           if (funcCode == WRITE_CODE) {   //写入
             if (register_addr == 0x01) {  // 归零
-              Serial.println("Homing");
-              Serial2.println("G28");
-              REGISTER[0x01] = write_payload;  //可能会溢出，下同
-              REGISTER[11] = 0;                //表明已经归零
+              Serial.println("Homing");   // XYZ三轴归零
+              if (write_payload == 0x01) {
+                Serial2.println("G28");
+                REGISTER[0x01] = write_payload;
+                REGISTER[11] = 0;                  //表明已经归零
+              } else if (write_payload == 0x02) {  //XY归零
+                Serial2.println("G28 X Y");
+                REGISTER[0x01] = write_payload;
+                REGISTER[11] = 0;                //表明已经归零
+              }
               modbus_ok = true;
             } else if (register_addr == 0x02) {  //移动XY位置
               Serial.print("Move to pos: ");
@@ -273,33 +279,33 @@ void loop() {
         str_z = frame2.substring(index_of_z + 3, index_of_e);
         pos_z = str_z.toFloat();
 
-//        Serial.print("str_x: ");
-//        Serial.println(str_x);
-//        Serial.print("pos_x: ");
-//        Serial.println(pos_x);
-//        Serial.print("str_y: ");
-//        Serial.println(str_y);
-//        Serial.print("pos_y: ");
-//        Serial.println(pos_y);
-//        Serial.print("str_z: ");
-//        Serial.println(str_z);
-//        Serial.print("pos_z: ");
+        //        Serial.print("str_x: ");
+        //        Serial.println(str_x);
+        //        Serial.print("pos_x: ");
+        //        Serial.println(pos_x);
+        //        Serial.print("str_y: ");
+        //        Serial.println(str_y);
+        //        Serial.print("pos_y: ");
+        //        Serial.println(pos_y);
+        //        Serial.print("str_z: ");
+        //        Serial.println(str_z);
+        //        Serial.print("pos_z: ");
 
 
         for (int m = 0; m < 127; m++) {  // 查找XY坐标和编号的关系
-            float delta_x;
-            float delta_y;
-            delta_x = POINTS_X[m] - pos_x;
-            delta_y = POINTS_Y[m] - pos_y;
-        if (abs(delta_x) < 0.03 && abs(delta_y) < 0.03) {
-//          Serial.print("[m] ");
-//          Serial.print(m);
-//          Serial.println("[REGISTER] ");
-//          Serial.println(hex_to_hex_string(REGISTER, 16));
-          REGISTER[12] = (unsigned char)m;
-//          Serial.println(hex_to_hex_string(REGISTER, 16));
-//          Serial.print("[12] ");
-//          Serial.println((int)REGISTER[12]);
+          float delta_x;
+          float delta_y;
+          delta_x = POINTS_X[m] - pos_x;
+          delta_y = POINTS_Y[m] - pos_y;
+          if (abs(delta_x) < 0.03 && abs(delta_y) < 0.03) {
+            //          Serial.print("[m] ");
+            //          Serial.print(m);
+            //          Serial.println("[REGISTER] ");
+            //          Serial.println(hex_to_hex_string(REGISTER, 16));
+            REGISTER[12] = (unsigned char)m;
+            //          Serial.println(hex_to_hex_string(REGISTER, 16));
+            //          Serial.print("[12] ");
+            //          Serial.println((int)REGISTER[12]);
           }
         }
         if (-0.1 < (pos_z - SAMPLE_Z_HIGH) < 0.1) {
