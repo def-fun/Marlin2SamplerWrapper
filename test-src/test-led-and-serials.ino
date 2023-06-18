@@ -8,6 +8,7 @@ https://github.com/espressif/arduino-esp32/issues/5463
     3. 点击编译、上传的按钮
     4. 控制台显示`Connecting........__`的时候，按住开发板上的Boot按钮，再按下开发板上的EN按钮，松开两个按钮之后便开始烧录
     5. 烧录之后，按一下EN按钮以重启ESP32，之后便能看到ＬＥＤ闪烁，以及分别在三个串口接收到数据
+    6. Arduino默认的烧录波特率是961200，如果上传失败，可能是因为所用的串口工具不支持这么高的波特率，可以尝试降低Arduino的`upload speed`
 */
 
 #include <HardwareSerial.h>
@@ -26,9 +27,9 @@ void setup() {
 }
 
 void loop() {
-  Serial.printf("seial-defalut\n");
-  Serial1.printf("seial-1\n");
-  Serial2.printf("seial-2\n");
+  Serial.printf("Serial-0\n");
+  Serial1.printf("Serial-1\n");
+  Serial2.printf("Serial-2\n");
   digitalWrite(LED_BUILTIN, HIGH);  // turn the LED on (HIGH is the voltage level)
   delay(500);                      // wait for a second
   digitalWrite(LED_BUILTIN, LOW);   // turn the LED off by making the voltage LOW
