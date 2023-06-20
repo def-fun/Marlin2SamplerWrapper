@@ -1,7 +1,9 @@
 /*
 Arduino Modbus 从站
 todo 自动计算所有样品瓶的坐标
-todo 检查marlin返回的数据之后，再响应modbus
+todo 检查G28的返回值之后，再返回`已归零`
+todo 瓶号不在定义范围内的，会移动到(1025.0, 1025.0)，需要做判断
+todo 完整支持modbus RTU的03和06
 https://www.heibing.org/2019/12/136
 */
 #include <Arduino.h>
@@ -25,17 +27,15 @@ https://www.heibing.org/2019/12/136
 //#define SAMPLE_POS_1_Y 10     //第一个瓶子的y坐标
 //#define SAMPLE_POS_END_X 110  //和第一个瓶子成对角线的瓶子的x坐标
 //#define SAMPLE_POS_END_Y 110  //和第一个瓶子成对角线的瓶子的y坐标
-#define COLLECTOR_POS_X 101.10  //第101个瓶子，废液瓶的x坐标
+#define COLLECTOR_POS_X 130.10  //第101个瓶子，废液瓶的x坐标
 #define COLLECTOR_POS_Y 101.10  //第101个瓶子，废液瓶的y坐标
-// __POINTS_X用于存储前25个瓶位的坐标，POINTS_X用于存储第101个瓶子的坐标
-float __POINTS_X[] = { 1025.0, 0.0, -0.0, -0.0, -0.0, -0.0, 25.0, 25.0, 25.0, 25.0, 25.0, 50.0, 50.0, 50.0, 50.0, 50.0,
-                       75.0, 75.0, 75.0, 75.0, 75.0, 100.0, 100.0, 100.0, 100.0, 100.0 };
-float __POINTS_Y[] = { 1025.0, 0.0, 25.0, 50.0, 75.0, 100.0, 0.0, 25.0, 50.0, 75.0, 100.0, 0.0, 25.0, 50.0, 75.0, 100.0,
-                       0.0, 25.0, 50.0, 75.0, 100.0, 0.0, 25.0, 50.0, 75.0, 100.0 };
-// 后面用1025.0初始化所有元素，因此所有大于1024的都是未定义的位置
+// __POINTS_X用于存储前25个瓶位的坐标，POINTS_X用于存储127个瓶子的坐标（索引0不计入）
+float __POINTS_X[] = { 1025.0, 10.0, 10.0, 10.0, 10.0, 10.0, 35.0, 35.0, 35.0, 35.0, 35.0, 60.0, 60.0, 60.0, 60.0, 60.0, 85.0, 85.0, 85.0, 85.0, 85.0, 110.0, 110.0, 110.0, 110.0, 110.0 };
+float __POINTS_Y[] = { 1025.0, 10.0, 35.0, 60.0, 85.0, 110.0, 10.0, 35.0, 60.0, 85.0, 110.0, 10.0, 35.0, 60.0, 85.0, 110.0, 10.0, 35.0, 60.0, 85.0, 110.0, 10.0, 35.0, 60.0, 85.0, 110.0 };
+// 后面用1025.0初始化所有元素，因此所有大于1024的坐标都是错误的、不在考虑范围内的位置
 float POINTS_X[128];
 float POINTS_Y[128];
-#define SAMPLE_Z_HIGH 15  //z轴升降的高度，单位mm
+#define SAMPLE_Z_HIGH 15.0  //z轴升降的高度，单位mm
 
 /* MODBUS寄存器地址，1-3为写入，11-13为读取，初始化均为0
     1,11 - 是否归零，0x00 没有归零，0x01 XYZ三轴已经归零
@@ -169,11 +169,11 @@ void loop() {
               if (write_payload == 0x01) {
                 Serial2.println("G28");
                 REGISTER[0x01] = write_payload;
-                REGISTER[11] = 0;                  //表明已经归零
+                REGISTER[11] = 1;               //表明已经归零
               } else if (write_payload == 0x02) {  //XY归零
                 Serial2.println("G28 X Y");
                 REGISTER[0x01] = write_payload;
-                REGISTER[11] = 0;                //表明已经归零
+                REGISTER[11] = 1;  //表明已经归零
               }
               modbus_ok = true;
             } else if (register_addr == 0x02) {  //移动XY位置
@@ -192,6 +192,7 @@ void loop() {
                 Serial.println("Z up");
                 Serial2.print("G0 Z0\n");
                 REGISTER[0x03] = 0x01;
+                REGISTER[13] = 0x01;
                 modbus_ok = true;
               } else if (write_payload == 0x02) {  //针头下降
                 Serial.println("Z down");
@@ -199,6 +200,7 @@ void loop() {
                 Serial2.print(SAMPLE_Z_HIGH);
                 Serial2.print("\n");
                 REGISTER[0x03] = 0x02;
+                REGISTER[13] = 0x02;
                 modbus_ok = true;
               } else {
                 modbus_ok = false;
@@ -216,6 +218,16 @@ void loop() {
               Serial.print("Read Z: ");
             } else {
               Serial.print("Error ");
+            }
+            if (write_payload == 3) {
+              frame1[2] = 6;  // 表示后面有6个字节
+              frame1[3] = 0;
+              frame1[4] = REGISTER[11];  //归零
+              frame1[5] = 0;
+              frame1[6] = REGISTER[12];  //XY位置
+              frame1[7] = 0;
+              frame1[8] = REGISTER[13];  //Z上下
+              address1 = 11;             //总共11字节
             }
             Serial.println(REGISTER[register_addr]);  // register_addr大于16会溢出
             Serial.print("[REGISTER HEX] ");
@@ -308,9 +320,11 @@ void loop() {
             //          Serial.println((int)REGISTER[12]);
           }
         }
-        if (-0.1 < (pos_z - SAMPLE_Z_HIGH) < 0.1) {
+        float delta_z;
+        delta_z = pos_z - SAMPLE_Z_HIGH;
+        if (abs(delta_z) < 0.1) {
           REGISTER[13] = 0x02;
-        } else if (-0.1 < pos_z < 0.1) {
+        } else if (abs(pos_z) < 0.1) {
           REGISTER[13] = 0x01;
         } else {
           REGISTER[13] = 0;
