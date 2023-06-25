@@ -3,7 +3,7 @@ Arduino Modbus 从站
 todo 自动计算所有样品瓶的坐标
 todo 检查G28的返回值之后，再返回`已归零`
 todo 瓶号不在定义范围内的，会移动到(1025.0, 1025.0)，需要做判断
-todo 完整支持modbus RTU的03和06
+todo 完整支持modbus RTU的03和06，如`14 03 00 0B 00 03 76 CC`  -> `14 03 06 00 02 00 03 00 04 5B E6`
 https://www.heibing.org/2019/12/136
 */
 #include <Arduino.h>
@@ -21,14 +21,15 @@ https://www.heibing.org/2019/12/136
 #define TX2 17
 
 /*提供样品盘参数，第一个瓶子的坐标在数组里的索引是2，以此类推. */
-//#define SAMPLE_X_NUM 5        //x方向有5列
-//#define SAMPLE_Y_NUM 5        //y方向有5列
+#define SAMPLE_X_NUM 5  //x方向有5列
+#define SAMPLE_Y_NUM 5  //y方向有5列
 //#define SAMPLE_POS_1_X 10     //第一个瓶子的x坐标
 //#define SAMPLE_POS_1_Y 10     //第一个瓶子的y坐标
 //#define SAMPLE_POS_END_X 110  //和第一个瓶子成对角线的瓶子的x坐标
 //#define SAMPLE_POS_END_Y 110  //和第一个瓶子成对角线的瓶子的y坐标
 #define COLLECTOR_POS_X 130.10  //第101个瓶子，废液瓶的x坐标
 #define COLLECTOR_POS_Y 101.10  //第101个瓶子，废液瓶的y坐标
+#define COLLECTOR_POS 101       //废液瓶的编号
 // __POINTS_X用于存储前25个瓶位的坐标，POINTS_X用于存储127个瓶子的坐标（索引0不计入）
 float __POINTS_X[] = { 1025.0, 10.0, 10.0, 10.0, 10.0, 10.0, 35.0, 35.0, 35.0, 35.0, 35.0, 60.0, 60.0, 60.0, 60.0, 60.0, 85.0, 85.0, 85.0, 85.0, 85.0, 110.0, 110.0, 110.0, 110.0, 110.0 };
 float __POINTS_Y[] = { 1025.0, 10.0, 35.0, 60.0, 85.0, 110.0, 10.0, 35.0, 60.0, 85.0, 110.0, 10.0, 35.0, 60.0, 85.0, 110.0, 10.0, 35.0, 60.0, 85.0, 110.0, 10.0, 35.0, 60.0, 85.0, 110.0 };
@@ -36,6 +37,7 @@ float __POINTS_Y[] = { 1025.0, 10.0, 35.0, 60.0, 85.0, 110.0, 10.0, 35.0, 60.0, 
 float POINTS_X[128];
 float POINTS_Y[128];
 #define SAMPLE_Z_HIGH 15.0  //z轴升降的高度，单位mm
+int XY_LIMIT = SAMPLE_X_NUM * SAMPLE_Y_NUM;
 
 /* MODBUS寄存器地址，1-3为写入，11-13为读取，初始化均为0
     1,11 - 是否归零，0x00 没有归零，0x01 XYZ三轴已经归零
@@ -178,15 +180,20 @@ void loop() {
               modbus_ok = true;
             } else if (register_addr == 0x02) {  //移动XY位置
               Serial.print("Move to pos: ");
-              Serial.println(frame1[5]);
-              //Serial2.printlnf("G0 X%d Y%d F6000", POINTS_X[frame1[5]], POINTS_Y[frame1[5]]);
-              Serial2.print("G0 X");
-              Serial2.print(POINTS_X[frame1[5]]);
-              Serial2.print(" Y");
-              Serial2.print(POINTS_Y[frame1[5]]);
-              Serial2.print(" F3000\n");
+              Serial.println(write_payload);
               REGISTER[0x02] = write_payload;
-              modbus_ok = true;
+              if (write_payload > XY_LIMIT && write_payload != COLLECTOR_POS) {
+                Serial.print("Out of limit");
+                modbus_ok = false;
+              } else {
+                //Serial2.printlnf("G0 X%d Y%d F6000", POINTS_X[frame1[5]], POINTS_Y[frame1[5]]);
+                Serial2.print("G0 X");
+                Serial2.print(POINTS_X[write_payload]);
+                Serial2.print(" Y");
+                Serial2.print(POINTS_Y[write_payload]);
+                Serial2.print(" F3000\n");
+                modbus_ok = true;
+              }
             } else if (register_addr == 0x03) {  //改变针头高度
               if (write_payload == 0x01) {       // 针头抬起
                 Serial.println("Z up");
@@ -219,19 +226,25 @@ void loop() {
             } else {
               Serial.print("Error ");
             }
-            if (write_payload == 3) {
-              frame1[2] = 6;  // 表示后面有6个字节
-              frame1[3] = 0;
-              frame1[4] = REGISTER[11];  //归零
-              frame1[5] = 0;
-              frame1[6] = REGISTER[12];  //XY位置
-              frame1[7] = 0;
-              frame1[8] = REGISTER[13];  //Z上下
-              address1 = 11;             //总共11字节
+            //            if (write_payload == 3) {
+            //              frame1[2] = 6;  // 表示后面有6个字节
+            //              frame1[3] = 0;
+            //              frame1[4] = REGISTER[11];  //归零
+            //              frame1[5] = 0;
+            //              frame1[6] = REGISTER[12];  //XY位置
+            //              frame1[7] = 0;
+            //              frame1[8] = REGISTER[13];  //Z上下
+            //              address1 = 11;             //加上CRC，总共11字节
+            //            }
+            frame1[2] = 2 * write_payload;     //MODBUS有效载荷的字节数
+            address1 = 5 + 2 * write_payload;  //MODBUS响应的总字节数，包括1字节站号、1字节功能码、1字节有效载荷长度、载荷和2字节CRC校验
+            for (int i = 1; i <= write_payload; i++) {
+              frame1[2 * i + 1] = 0;
+              frame1[2 * i + 2] = REGISTER[register_addr + i - 1];
             }
             Serial.println(REGISTER[register_addr]);  // register_addr大于16会溢出
             Serial.print("[REGISTER HEX] ");
-            Serial.print(hex_to_hex_string(REGISTER, 16));
+            Serial.println(hex_to_hex_string(REGISTER, 16));
             modbus_ok = true;
           } else {
             modbus_ok = false;
