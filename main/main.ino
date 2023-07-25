@@ -10,16 +10,16 @@ reference https://www.heibing.org/2019/12/136
 #include <Arduino.h>
 
 /*通讯参数*/
-#define bufferSize 255      //modbus一帧数据的最大字节数量
-#define SERIAL0_BAUDRATE 9600       //定义默认串口的波特率
-#define SERIAL1_BAUDRATE 9600       //定义modbus通讯的波特率
-#define SERIAL2_BAUDRATE 115200     //定义和marlin通讯的波特率
-#define slaveID 20          //定义modbus RTU从站站号，20 == 0x14
-#define modbusDataSize 100  //定义modbus数据库空间大小
-#define LED_BUILTIN 2       //板载LED
-#define RX1 18              //Serial1，转RS485 modbus和上位机通信
+#define bufferSize 255           //modbus一帧数据的最大字节数量
+#define SERIAL0_BAUDRATE 9600    //定义默认串口的波特率
+#define SERIAL1_BAUDRATE 9600    //定义modbus通讯的波特率
+#define SERIAL2_BAUDRATE 115200  //定义和marlin通讯的波特率
+#define slaveID 20               //定义modbus RTU从站站号，20 == 0x14
+#define modbusDataSize 100       //定义modbus数据库空间大小
+#define LED_BUILTIN 2            //板载LED
+#define RX1 18                   //Serial1，转RS485 modbus和上位机通信
 #define TX1 19
-#define RX2 16              //Serial2，TTL，和marlin通信
+#define RX2 16  //Serial2，TTL，和marlin通信
 #define TX2 17
 
 /*提供样品盘参数，第一个瓶子的坐标排在数组里的第二个（下标1），以此类推. */
@@ -40,8 +40,9 @@ float POINTS_X[128];
 float POINTS_Y[128];
 #define SAMPLE_Z_HIGH 15.0  //z轴升降的高度，单位mm
 int XY_LIMIT = SAMPLE_X_NUM * SAMPLE_Y_NUM;
-bool is_homed = false; //通过原地移动来判断是否已经归零
-int ok_count = 0;  //统计收到ok回复的个数
+bool is_homed = false;  //通过原地移动来判断是否已经归零
+bool G28_done = false;  // 是否归零
+int ok_count = 0;       //统计收到ok回复的个数
 
 /* MODBUS寄存器地址，1-3存储写入的值，11-13存储当前的状态，初始化均为0
     1,11 - 是否归零，0x00 没有归零，0x01 XYZ三轴已经归零
@@ -60,13 +61,15 @@ int SERIAL2_READ_INTERVAL = 1200;   // 向marlin发送位置请求的时间间�
 float pos_x = 0.0;                  // `M114 R`读取到的XYZ位置
 float pos_y = 0.0;
 float pos_z = 0.0;
+int G28_AT = 0;  //接收到归零的时间点，10秒后将寄存器置1
+
 
 void setup() {
   pinMode(LED_BUILTIN, OUTPUT);
   //初始化串口
   Serial.begin(SERIAL0_BAUDRATE);                         //调试用
   Serial1.begin(SERIAL1_BAUDRATE, SERIAL_8N1, RX1, TX1);  //RS485，和上位机通信
-  Serial2.begin(SERIAL2_BAUDRATE);                          //TTL，和marlin通信
+  Serial2.begin(SERIAL2_BAUDRATE);                        //TTL，和marlin通信
   Serial.println("# Marlin2SamplerWrapper v0.0.0");
   Serial.println("# by gu_jiefan@pharmablock.com");
   serial2_read_at = millis();
@@ -89,6 +92,7 @@ void setup() {
   //   Serial.println(POINTS_Y[i]);
   // }
   // Serial.println("------------------------------");
+  G28_AT = millis();
 }
 
 void loop() {
@@ -155,9 +159,11 @@ void loop() {
               Serial.println("Homing");   // XYZ三轴归零
               if (write_payload == 0x01) {
                 Serial2.println("G28");
-                REGISTER[0x01] = write_payload;
-                REGISTER[11] = 1;               //表明已经归零
-              } else if (write_payload == 0x02) {  //XY归零
+                REGISTER[0x01] = 0;  //先立刻置0，10秒后根据marlin响应再改成1，下同
+                REGISTER[11] = 0;
+                G28_AT = millis();
+                G28_done = false;
+              } else if (write_payload == 0x02) {  //XY归零 todo 支持XYZ分别归零
                 Serial2.println("G28 X Y");
                 REGISTER[0x01] = write_payload;
                 REGISTER[11] = 1;  //表明已经归零
@@ -194,10 +200,9 @@ void loop() {
                 REGISTER[0x03] = 0x02;
                 REGISTER[13] = 0x02;
                 modbus_ok = true;
-              } else if(write_payload == 0x00) {
+              } else if (write_payload == 0x00) {
                 modbus_ok = true;
-              }
-              else {
+              } else {
                 modbus_ok = false;
               }
             } else {
@@ -265,9 +270,9 @@ void loop() {
       //      Serial.print("address2: ");
       //      Serial.println(address2);
       // echo:Home X First
-      if(frame2.indexOf("Home")>0 && frame2.indexOf("First") > 0){
-         //需要归零
-         REGISTER[11] = 0;
+      if (frame2.indexOf("Home") > 0 && frame2.indexOf("First") > 0) {
+        //需要归零
+        REGISTER[11] = 0;
       }
       if (frame2.endsWith("ok\n") && frame2.indexOf("X:") == 0) {
         // 解析XYZ的位置  X:0.00 Y:0.00 Z:0.00 E:0.00 Count A:0B:0 Z:0
@@ -305,7 +310,7 @@ void loop() {
           float delta_y;
           delta_x = POINTS_X[m] - pos_x;
           delta_y = POINTS_Y[m] - pos_y;
-          if (abs(delta_x) < 0.03 && abs(delta_y) < 0.03) && abs(pos_x) < 1024.0 && abs(pos_y) < 1024.0 {
+          if (abs(delta_x) < 0.03 && abs(delta_y) < 0.03 && abs(pos_x) < 1024.0 && abs(pos_y) < 1024.0) {
             //          Serial.print("[m] ");
             //          Serial.print(m);
             //          Serial.println("[REGISTER] ");
@@ -340,6 +345,11 @@ void loop() {
     //固定每SERIAL2_READ_INTERVAL毫秒向marlin查询一次当前位置
     Serial2.println("M114 R");
     serial2_read_at = millis();
+  }
+  if (!G28_done && millis() - G28_AT > 10000) {
+    G28_done = true;  //标记已经归零
+    REGISTER[0x01] = 1;
+    REGISTER[11] = 1;
   }
 }
 
