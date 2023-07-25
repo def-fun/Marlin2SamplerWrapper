@@ -71,8 +71,8 @@ void setup() {
   Serial.println("# by gu_jiefan@pharmablock.com");
   serial2_read_at = millis();
   for (int i = 0; i < 128; i++) {  //数组里的所有元素用0.0初始化
-    POINTS_X[i] = 0.0;
-    POINTS_Y[i] = 0.0;
+    POINTS_X[i] = 1025.0;
+    POINTS_Y[i] = 1025.0;
   }
   for (int i = 0; i <= 25; i++) {
     POINTS_X[i] = __POINTS_X[i];
@@ -194,7 +194,10 @@ void loop() {
                 REGISTER[0x03] = 0x02;
                 REGISTER[13] = 0x02;
                 modbus_ok = true;
-              } else {
+              } else if(write_payload == 0x00) {
+                modbus_ok = true;
+              }
+              else {
                 modbus_ok = false;
               }
             } else {
@@ -302,7 +305,7 @@ void loop() {
           float delta_y;
           delta_x = POINTS_X[m] - pos_x;
           delta_y = POINTS_Y[m] - pos_y;
-          if (abs(delta_x) < 0.03 && abs(delta_y) < 0.03) {
+          if (abs(delta_x) < 0.03 && abs(delta_y) < 0.03) && abs(pos_x) < 1024.0 && abs(pos_y) < 1024.0 {
             //          Serial.print("[m] ");
             //          Serial.print(m);
             //          Serial.println("[REGISTER] ");
