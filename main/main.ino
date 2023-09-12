@@ -190,7 +190,7 @@ void loop() {
                 Serial.println("Z up");
                 Serial2.print("G0 Z0 F800\n");
                 REGISTER[0x03] = 0x01;
-                REGISTER[13] = 0x01;
+                // REGISTER[13] = 0x01;
                 modbus_ok = true;
               } else if (write_payload == 0x02) {  //针头下降
                 Serial.println("Z down");
@@ -198,7 +198,7 @@ void loop() {
                 Serial2.print(SAMPLE_Z_HIGH);
                 Serial2.print(" F800\n");
                 REGISTER[0x03] = 0x02;
-                REGISTER[13] = 0x02;
+                // REGISTER[13] = 0x02;
                 modbus_ok = true;
               } else if (write_payload == 0x00) {
                 modbus_ok = true;
