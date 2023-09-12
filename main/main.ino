@@ -1,43 +1,50 @@
 /*
-Arduino Modbus 从站
+3d打印机作为自动取样器（Modbus从站），基于ESP32和Arduino IDE
 todo 自动计算所有样品瓶的坐标
 todo 检查G28的返回值之后，再返回`已归零`
-todo 瓶号不在定义范围内的，会移动到(1025.0, 1025.0)，需要做判断
-todo 完整支持modbus RTU的03和06
-https://www.heibing.org/2019/12/136
+TODO
+feature 瓶号不在定义范围内的，会丢弃命令
+feature 完整支持modbus RTU的03功能码，如`14 03 00 0B 00 03 76 CC`  -> `14 03 06 00 02 00 03 00 04 5B E6`
+reference https://www.heibing.org/2019/12/136
 */
 #include <Arduino.h>
-#include <Regexp.h>
 
 /*通讯参数*/
-#define bufferSize 255      //modbus一帧数据的最大字节数量
-#define baudrate 9600       //定义所有通讯的波特率
-#define slaveID 20          //定义modbus RTU从站站号，20 == 0x14
-#define modbusDataSize 100  //定义modbus数据库空间大小
-#define LED_BUILTIN 2       //板载LED
-#define RX1 18              //Serial1，转RS485 modbus和上位机通信
+#define bufferSize 255           //modbus一帧数据的最大字节数量
+#define SERIAL0_BAUDRATE 9600    //定义默认串口的波特率
+#define SERIAL1_BAUDRATE 9600    //定义modbus通讯的波特率
+#define SERIAL2_BAUDRATE 115200  //定义和marlin通讯的波特率
+#define slaveID 20               //定义modbus RTU从站站号，20 == 0x14
+#define modbusDataSize 100       //定义modbus数据库空间大小
+#define LED_BUILTIN 2            //板载LED
+#define RX1 18                   //Serial1，转RS485 modbus和上位机通信
 #define TX1 19
 #define RX2 16  //Serial2，TTL，和marlin通信
 #define TX2 17
 
-/*提供样品盘参数，第一个瓶子的坐标在数组里的索引是2，以此类推. */
-//#define SAMPLE_X_NUM 5        //x方向有5列
-//#define SAMPLE_Y_NUM 5        //y方向有5列
+/*提供样品盘参数，第一个瓶子的坐标排在数组里的第二个（下标1），以此类推. */
+#define SAMPLE_X_NUM 5  //x方向有5列
+#define SAMPLE_Y_NUM 5  //y方向有5列
 //#define SAMPLE_POS_1_X 10     //第一个瓶子的x坐标
 //#define SAMPLE_POS_1_Y 10     //第一个瓶子的y坐标
 //#define SAMPLE_POS_END_X 110  //和第一个瓶子成对角线的瓶子的x坐标
 //#define SAMPLE_POS_END_Y 110  //和第一个瓶子成对角线的瓶子的y坐标
-#define COLLECTOR_POS_X 130.10  //第101个瓶子，废液瓶的x坐标
-#define COLLECTOR_POS_Y 101.10  //第101个瓶子，废液瓶的y坐标
+#define COLLECTOR_POS_X 2.0  //第101个瓶子，废液瓶的x坐标
+#define COLLECTOR_POS_Y 18.0  //第101个瓶子，废液瓶的y坐标
+#define COLLECTOR_POS 101       //废液瓶的编号
 // __POINTS_X用于存储前25个瓶位的坐标，POINTS_X用于存储127个瓶子的坐标（索引0不计入）
-float __POINTS_X[] = { 1025.0, 10.0, 10.0, 10.0, 10.0, 10.0, 35.0, 35.0, 35.0, 35.0, 35.0, 60.0, 60.0, 60.0, 60.0, 60.0, 85.0, 85.0, 85.0, 85.0, 85.0, 110.0, 110.0, 110.0, 110.0, 110.0 };
-float __POINTS_Y[] = { 1025.0, 10.0, 35.0, 60.0, 85.0, 110.0, 10.0, 35.0, 60.0, 85.0, 110.0, 10.0, 35.0, 60.0, 85.0, 110.0, 10.0, 35.0, 60.0, 85.0, 110.0, 10.0, 35.0, 60.0, 85.0, 110.0 };
+float __POINTS_X[] = { 0.0, 39.0, 38.75, 38.5, 38.25, 38.0, 63.25, 63.0, 62.75, 62.5, 62.25, 87.5, 87.25, 87.0, 86.75, 86.5, 111.75, 111.5, 111.25, 111.0, 110.75, 136.0, 135.75, 135.5, 135.25, 135.0};
+float __POINTS_Y[] = { 0.0, 0.0, 24.25, 48.5, 72.75, 97.0, 0.25, 24.5, 48.75, 73.0, 97.25, 0.5, 24.75, 49.0, 73.25, 97.5, 0.75, 25.0, 49.25, 73.5, 97.75, 1.0, 25.25, 49.5, 73.75, 98.0};
 // 后面用1025.0初始化所有元素，因此所有大于1024的坐标都是错误的、不在考虑范围内的位置
 float POINTS_X[128];
 float POINTS_Y[128];
 #define SAMPLE_Z_HIGH 15.0  //z轴升降的高度，单位mm
+int XY_LIMIT = SAMPLE_X_NUM * SAMPLE_Y_NUM;
+bool is_homed = false;  //通过原地移动来判断是否已经归零
+bool G28_done = false;  // 是否归零
+int ok_count = 0;       //统计收到ok回复的个数
 
-/* MODBUS寄存器地址，1-3为写入，11-13为读取，初始化均为0
+/* MODBUS寄存器地址，1-3存储写入的值，11-13存储当前的状态，初始化均为0
     1,11 - 是否归零，0x00 没有归零，0x01 XYZ三轴已经归零
     2,12 - XY位置，1-25为取样瓶，101为废液瓶
     3,13 - 针头升降，0x01 针头抬起，0x02 针头落下
@@ -50,21 +57,23 @@ unsigned char READ_CODE = 0x03;
 bool is_serial2_reading = false;
 String frame2 = "";                 //Serial2
 unsigned long serial2_read_at = 0;  // 读取到串口数据的时间点
-int serial2_read_interval = 1200;   // 向marlin发送位置请求的时间间隔，单位毫秒
+int SERIAL2_READ_INTERVAL = 1200;   // 向marlin发送位置请求的时间间隔，单位毫秒
 float pos_x = 0.0;                  // `M114 R`读取到的XYZ位置
 float pos_y = 0.0;
 float pos_z = 0.0;
+int G28_AT = 0;  //接收到归零的时间点，10秒后将寄存器置1
+
 
 void setup() {
   pinMode(LED_BUILTIN, OUTPUT);
   //初始化串口
-  Serial.begin(baudrate);                         //调试用
-  Serial1.begin(baudrate, SERIAL_8N1, RX1, TX1);  //RS485，和上位机通信
-  Serial2.begin(115200);                          //TTL，和marlin通信
+  Serial.begin(SERIAL0_BAUDRATE);                         //调试用
+  Serial1.begin(SERIAL1_BAUDRATE, SERIAL_8N1, RX1, TX1);  //RS485，和上位机通信
+  Serial2.begin(SERIAL2_BAUDRATE);                        //TTL，和marlin通信
   Serial.println("# Marlin2SamplerWrapper v0.0.0");
   Serial.println("# by gu_jiefan@pharmablock.com");
   serial2_read_at = millis();
-  for (int i = 0; i < 128; i++) {  //数组里的所有元素用1025.0初始化
+  for (int i = 0; i < 128; i++) {  //数组里的所有元素用0.0初始化
     POINTS_X[i] = 1025.0;
     POINTS_Y[i] = 1025.0;
   }
@@ -83,28 +92,8 @@ void setup() {
   //   Serial.println(POINTS_Y[i]);
   // }
   // Serial.println("------------------------------");
+  G28_AT = millis();
 }
-
-//// called for each match
-//void match_callback(const char *match,          // matching string (not null-terminated)
-//                    const unsigned int length,  // length of matching string
-//                    const MatchState &ms)       // MatchState in use (to get captures)
-//{
-//  char cap[10];  // must be large enough to hold captures
-//
-//  Serial.print("Matched: ");
-//  Serial.write((byte *)match, length);
-//  Serial.println();
-//
-//  for (word i = 0; i < ms.level; i++) {
-//    Serial.print("Capture ");
-//    Serial.print(i, DEC);
-//    Serial.print(" = ");
-//    ms.GetCapture(cap, i);
-//    Serial.println(cap);
-//  }  // end of for each capture
-//
-//}  // end of match_callback
 
 void loop() {
   //延时
@@ -121,7 +110,7 @@ void loop() {
   delay(100);
 
   //延时1.5个字符宽度
-  characterTime = 15000000 / baudrate;
+  characterTime = 15000000 / SERIAL1_BAUDRATE;
 
   //如果串口缓冲区数据量大于0进入条件
   while (Serial1.available() > 0) {
@@ -155,6 +144,8 @@ void loop() {
         unsigned char slaveCode = frame1[0];
         //设备号匹配，兼容广播模式
         if (slaveCode == slaveID || slaveCode == 0) {
+          //通讯成功，熄灭板载LED
+          digitalWrite(LED_BUILTIN, LOW);
           unsigned char funcCode = frame1[1];
           unsigned char register_addr = frame1[2] * 256 + frame1[3];
           unsigned char write_payload = frame1[4] * 256 + frame1[5];  //可能会溢出
@@ -168,9 +159,11 @@ void loop() {
               Serial.println("Homing");   // XYZ三轴归零
               if (write_payload == 0x01) {
                 Serial2.println("G28");
-                REGISTER[0x01] = write_payload;
-                REGISTER[11] = 1;               //表明已经归零
-              } else if (write_payload == 0x02) {  //XY归零
+                REGISTER[0x01] = 0;  //先立刻置0，10秒后根据marlin响应再改成1，下同
+                REGISTER[11] = 0;
+                G28_AT = millis();
+                G28_done = false;
+              } else if (write_payload == 0x02) {  //XY归零 todo 支持XYZ分别归零
                 Serial2.println("G28 X Y");
                 REGISTER[0x01] = write_payload;
                 REGISTER[11] = 1;  //表明已经归零
@@ -178,29 +171,36 @@ void loop() {
               modbus_ok = true;
             } else if (register_addr == 0x02) {  //移动XY位置
               Serial.print("Move to pos: ");
-              Serial.println(frame1[5]);
-              //Serial2.printlnf("G0 X%d Y%d F6000", POINTS_X[frame1[5]], POINTS_Y[frame1[5]]);
-              Serial2.print("G0 X");
-              Serial2.print(POINTS_X[frame1[5]]);
-              Serial2.print(" Y");
-              Serial2.print(POINTS_Y[frame1[5]]);
-              Serial2.print(" F3000\n");
+              Serial.println(write_payload);
               REGISTER[0x02] = write_payload;
-              modbus_ok = true;
-            } else if (register_addr == 0x03) {  //改变针头高度
+              if (write_payload > XY_LIMIT && write_payload != COLLECTOR_POS) {
+                Serial.print("Out of limit");
+                modbus_ok = false;
+              } else {
+                //Serial2.printlnf("G0 X%d Y%d F6000", POINTS_X[frame1[5]], POINTS_Y[frame1[5]]);
+                Serial2.print("G0 X");
+                Serial2.print(POINTS_X[write_payload]);
+                Serial2.print(" Y");
+                Serial2.print(POINTS_Y[write_payload]);
+                Serial2.print(" F3000\n");
+                modbus_ok = true;
+              }
+            } else if (register_addr == 0x03) {  //改变针头高度，速度太快会丢步
               if (write_payload == 0x01) {       // 针头抬起
                 Serial.println("Z up");
-                Serial2.print("G0 Z0\n");
+                Serial2.print("G0 Z0 F800\n");
                 REGISTER[0x03] = 0x01;
-                REGISTER[13] = 0x01;
+                // REGISTER[13] = 0x01;
                 modbus_ok = true;
               } else if (write_payload == 0x02) {  //针头下降
                 Serial.println("Z down");
                 Serial2.print("G0 Z");
                 Serial2.print(SAMPLE_Z_HIGH);
-                Serial2.print("\n");
+                Serial2.print(" F800\n");
                 REGISTER[0x03] = 0x02;
-                REGISTER[13] = 0x02;
+                // REGISTER[13] = 0x02;
+                modbus_ok = true;
+              } else if (write_payload == 0x00) {
                 modbus_ok = true;
               } else {
                 modbus_ok = false;
@@ -219,19 +219,15 @@ void loop() {
             } else {
               Serial.print("Error ");
             }
-            if (write_payload == 3) {
-              frame1[2] = 6;  // 表示后面有6个字节
-              frame1[3] = 0;
-              frame1[4] = REGISTER[11];  //归零
-              frame1[5] = 0;
-              frame1[6] = REGISTER[12];  //XY位置
-              frame1[7] = 0;
-              frame1[8] = REGISTER[13];  //Z上下
-              address1 = 11;             //总共11字节
+            frame1[2] = 2 * write_payload;     //MODBUS有效载荷的字节数
+            address1 = 5 + 2 * write_payload;  //MODBUS响应的总字节数，包括1字节站号、1字节功能码、1字节有效载荷长度、载荷和2字节CRC校验
+            for (int i = 1; i <= write_payload; i++) {
+              frame1[2 * i + 1] = 0;
+              frame1[2 * i + 2] = REGISTER[register_addr + i - 1];
             }
             Serial.println(REGISTER[register_addr]);  // register_addr大于16会溢出
             Serial.print("[REGISTER HEX] ");
-            Serial.print(hex_to_hex_string(REGISTER, 16));
+            Serial.println(hex_to_hex_string(REGISTER, 16));
             modbus_ok = true;
           } else {
             modbus_ok = false;
@@ -273,6 +269,11 @@ void loop() {
       //      Serial.println(frame2);
       //      Serial.print("address2: ");
       //      Serial.println(address2);
+      // echo:Home X First
+      if (frame2.indexOf("Home") > 0 && frame2.indexOf("First") > 0) {
+        //需要归零
+        REGISTER[11] = 0;
+      }
       if (frame2.endsWith("ok\n") && frame2.indexOf("X:") == 0) {
         // 解析XYZ的位置  X:0.00 Y:0.00 Z:0.00 E:0.00 Count A:0B:0 Z:0
         //        Serial.println("try to match");
@@ -309,7 +310,7 @@ void loop() {
           float delta_y;
           delta_x = POINTS_X[m] - pos_x;
           delta_y = POINTS_Y[m] - pos_y;
-          if (abs(delta_x) < 0.03 && abs(delta_y) < 0.03) {
+          if (abs(delta_x) < 0.03 && abs(delta_y) < 0.03 && abs(pos_x) < 1024.0 && abs(pos_y) < 1024.0) {
             //          Serial.print("[m] ");
             //          Serial.print(m);
             //          Serial.println("[REGISTER] ");
@@ -340,10 +341,15 @@ void loop() {
     }
   }
   frame2 = "";
-  if (millis() - serial2_read_at > serial2_read_interval) {
-    //要求marlin汇报当前位置
+  if (millis() - serial2_read_at > SERIAL2_READ_INTERVAL) {
+    //固定每SERIAL2_READ_INTERVAL毫秒向marlin查询一次当前位置
     Serial2.println("M114 R");
     serial2_read_at = millis();
+  }
+  if (!G28_done && millis() - G28_AT > 10000) {
+    G28_done = true;  //标记已经归零
+    REGISTER[0x01] = 1;
+    REGISTER[11] = 1;
   }
 }
 
