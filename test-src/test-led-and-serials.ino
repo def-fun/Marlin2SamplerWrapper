@@ -22,7 +22,7 @@ https://github.com/espressif/arduino-esp32/issues/5463
 void setup() {
   Serial.begin(9600);
   Serial1.begin(9600, SERIAL_8N1, RX1, TX1);
-  Serial2.begin(9600);
+  Serial2.begin(9600, SERIAL_8N1, RX2, TX2);
   pinMode(LED_BUILTIN, OUTPUT);
 }
 
